@@ -6,7 +6,7 @@ Plugin that provides domains with LetsEncrypt SSL certificates.
 
 ## Requirements
 
-* i-MSCP Serie 1.3.x
+* i-MSCP 1.3.x
 
 ### Debian / Ubuntu packages
 
