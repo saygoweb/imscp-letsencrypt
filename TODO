@@ -7,7 +7,11 @@
   - DONE Show usage
   - DONE Stub additional certbot-auto options
 - DONE Do the regex of the ssl config file to change the file name of the SSL key and cert  
+- Update the tests to test for add certificate
+  - Update the database then run
 - Remove the test code so that the letsencrypt status is ok
+- Delete certificate
+  - Mostly like Add, but unlink the dummy certificate and set the ssl_cert status to disabled
 - Might have some sequence issues.  If the fake cert is already there the right things happen in the Domain module.
   If the cert is not yet present it doesn't create the SSL config
 

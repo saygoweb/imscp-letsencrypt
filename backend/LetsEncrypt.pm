@@ -207,7 +207,7 @@ sub run
 {
     my $self = shift;
 
-    # TODO Find the domains for which we need to generate certificates
+    # Find the domains for which we need to generate certificates
     my $rows = $self->{'db'}->doQuery(
         'letsencrypt_id',
         "
@@ -239,12 +239,13 @@ sub run
                 @sql = ('DELETE FROM letsencrypt WHERE letsencrypt_id = ?', $_->{'letsencrypt_id'});
             }
         }
-        # TODO Put this back, commented out for dev testing CP 2017-06
-        # my $qrs = $self->{'db'}->doQuery( 'dummy', @sql );
-        # unless (ref $qrs eq 'HASH') {
-        #     error( $qrs );
-        #     return 1;
-        # }
+        # Update the status of the last operation
+        # Comment out the below for dev testing CP 2017-06
+        my $qrs = $self->{'db'}->doQuery( 'dummy', @sql );
+        unless (ref $qrs eq 'HASH') {
+            error( $qrs );
+            return 1;
+        }
     }
 
     0;
@@ -306,6 +307,7 @@ sub _addCertificate
 
     # Fake out the SSL_SUPPORT in the Domains module by updating the ssl_certs table and creating a fake cert file
     my $rs = 0;
+    # REVIEW: Why do we care what the status is? Just existing should be fine.
     my $ssl_cert = $self->{'db'}->doQuery(
         'domain_id', 'SELECT * FROM ssl_certs WHERE domain_type = ? AND domain_id = ? AND status = ?',
         'dmn', $domainId, 'ok'
@@ -342,7 +344,6 @@ sub _addCertificate
     my ($stdout, $stderr);
     # TODO May want to put a check on domain type of 'dmn' before also doing www.$certName CP 2017-08
     execute(
-        # $certbot . " --no-bootstrap --no-self-update --non-interactive -v -d " . escapeShell($certName) . " -d " . escapeShell('www.' . $certName),
         $certbot . " --no-bootstrap --no-self-update --non-interactive -v -d " . escapeShell($certName) . " -d " . escapeShell('www.' . $certName),
         \$stdout, \$stderr
     ) == 0 or die( $stderr || 'Unknown error' );
@@ -446,7 +447,34 @@ EOF
 
 sub _deleteCertificate
 {
-    my ($self, $domainId, $aliasId, $domain) = @_;
+    my ($self, $domainId, $certName, $aliasId, $domain) = @_;
+
+    # Fake out the SSL_SUPPORT in the Domains module by updating the ssl_certs table and creating a fake cert file
+    my $rs = 0;
+    $rs = $self->{'db'}->doQuery(
+        'i',
+        "DELETE FROM ssl_certs WHERE domain_type = ? AND domain_id = ?",
+        'dmn', $domainId
+    );
+    unless (ref $rs eq 'HASH') {
+        error( $rs );
+        return 1;
+    }
+
+    # Delete the fake cert file, its not valid PEM but that doesn't matter.
+    my $certificate = iMSCP::File->new( filename => "$main::imscpConfig{'GUI_ROOT_DIR'}/data/certs/$certName.pem");
+    $certificate->delFile();
+
+    # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
+    $rs = $self->{'db'}->doQuery(
+        'u',
+        "UPDATE domain SET domain_status = 'toadd' WHERE domain_id = ? ",
+        $domainId
+    );
+    unless (ref $rs eq 'HASH') {
+        error( $rs );
+        return 1;
+    }
  
     0;
 }
