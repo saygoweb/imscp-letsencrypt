@@ -1,1 +1,13 @@
 
+2017-08
+- SEOUL Download Perldoc
+- DONE Make the certbot-auto-test app to mock certbot-auto for dev
+  - DONE Make it honor -d
+  - DONE Strip www. to allow for more than one -d option typically with www.domain
+  - DONE Show usage
+  - DONE Stub additional certbot-auto options
+- DONE Do the regex of the ssl config file to change the file name of the SSL key and cert  
+- Remove the test code so that the letsencrypt status is ok
+- Might have some sequence issues.  If the fake cert is already there the right things happen in the Domain module.
+  If the cert is not yet present it doesn't create the SSL config
+

@@ -164,8 +164,10 @@ class iMSCP_Plugin_LetsEncrypt extends iMSCP_Plugin_Action
     {
         $pluginDir = $this->getPluginManager()->pluginGetDirectory() . '/' . $this->getName();
         return array(
-            '/reseller/letsencrypt.php' => $pluginDir . '/frontend/reseller/letsencrypt.php',
-            '/client/letsencrypt.php'   => $pluginDir . '/frontend/client/letsencrypt.php'
+            '/reseller/letsencrypt.php'    => $pluginDir . '/frontend/reseller/letsencrypt.php',
+            '/client/letsencrypt.php'      => $pluginDir . '/frontend/client/letsencrypt.php',
+            '/client/letsencrypt_edit.php' => $pluginDir . '/frontend/client/letsencrypt_edit.php',
+            '/client/test.php' => $pluginDir . '/frontend/client/test.php'
         );
     }
 
@@ -234,20 +236,22 @@ class iMSCP_Plugin_LetsEncrypt extends iMSCP_Plugin_Action
     {
         static $hasAccess = NULL;
 
-        if (NULL === $hasAccess) {
-            $stmt = exec_query(
-                '
-                    SELECT COUNT(admin_id) as cnt FROM letsencrypt INNER JOIN admin USING(admin_id)
-                    WHERE admin_id = ? AND admin_status = ?
-                ',
-                array($customerId, 'ok')
-            );
+        return true; // TODO Currently everyone has LetsEncrypt available on their account.
 
-            $row = $stmt->fetchRow(PDO::FETCH_ASSOC);
-            $hasAccess = (bool)$row['cnt'];
-        }
+        // if (NULL === $hasAccess) {
+        //     $stmt = exec_query(
+        //         '
+        //             SELECT COUNT(admin_id) as cnt FROM letsencrypt INNER JOIN admin USING(admin_id)
+        //             WHERE admin_id = ? AND admin_status = ?
+        //         ',
+        //         array($customerId, 'ok')
+        //     );
 
-        return $hasAccess;
+        //     $row = $stmt->fetchRow(PDO::FETCH_ASSOC);
+        //     $hasAccess = (bool)$row['cnt'];
+        // }
+
+        // return $hasAccess;
     }
 
     /**
@@ -277,7 +281,15 @@ class iMSCP_Plugin_LetsEncrypt extends iMSCP_Plugin_Action
                     $page->addPage(array(
                         'label'       => tr('LetsEncrypt'),
                         'uri'         => '/client/letsencrypt.php',
-                        'title_class' => 'domains'
+                        'title_class' => 'domains',
+                        'pages'       => array(
+                            'letsencrypt_edit' => array(
+                                'label'       => tr('LetsEncrypt Edit'),
+                                'uri'         => '/client/letsencrypt_edit.php',
+                                'title_class' => '',
+                                'visible'     => false
+                            )
+                        )
                     ));
                 }
             }
