@@ -35,9 +35,9 @@
             </td>
             <td>
                 <div class="radio">
-                    <input type="radio" name="http_forward" id="http_forward_yes"{ENABLED_YES} value="yes">
+                    <input type="radio" name="http_forward" id="http_forward_yes"{HTTP_FORWARD_YES} value="yes">
                     <label for="http_forward_yes">{TR_YES}</label>
-                    <input type="radio" name="http_forward" id="http_forward_no"{ENABLED_NO} value="no">
+                    <input type="radio" name="http_forward" id="http_forward_no"{HTTP_FORWARD_NO} value="no">
                     <label for="http_forward_no">{TR_NO}</label>
                 </div>
             </td>

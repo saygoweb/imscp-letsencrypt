@@ -38,7 +38,7 @@ use Servers::httpd;
 use version;
 use parent 'Common::SingletonClass';
 
-use Data::Dumper;
+# use Data::Dumper;
 
 =head1 DESCRIPTION
 
@@ -224,12 +224,14 @@ sub run
     for(values %{$rows}) {
         if ($_->{'status'} =~ /^to(?:add|change)$/) {
             my $rs = $self->_addCertificate( $_->{'domain_id'}, $_->{'cert_name'}, $_->{'alias_id'}, $_->{'subdomain_id'} );
+            $rs |= $self->_updateForward(  $_->{'domain_id'}, $_->{'cert_name'}, $_->{'http_forward'} );
             @sql = (
                 'UPDATE letsencrypt SET status = ? WHERE letsencrypt_id = ?',
                 ($rs ? scalar getMessageByType( 'error' ) || 'Unknown error' : 'ok'), $_->{'letsencrypt_id'}
             );
         } elsif ($_->{'status'} eq 'todelete') {
             my $rs = $self->_deleteCertificate( $_->{'domain_id'}, $_->{'cert_name'}, $_->{'alias_id'}, $_->{'subdomain_id'} );
+            $rs |= $self->_updateForward(  $_->{'domain_id'}, $_->{'cert_name'}, 0 );
             if ($rs) {
                 @sql = (
                     'UPDATE letsencrypt SET status = ? WHERE letsencrypt_id = ?',
@@ -278,8 +280,6 @@ sub _init
     );
     fatal( sprintf( 'Could not create %s SSL certificate directory', $self->{'certsDir'} ) ) if $rs;
 
-    iMSCP::EventManager->getInstance()->register( 'beforeHttpdAddDmn', sub { $self->_onBeforeHttpdAddDmn( @_ ); } );
-    iMSCP::EventManager->getInstance()->register( 'beforeHttpdBuildConf', sub { $self->_onBeforeHttpdBuildConf( @_ ); } );
     iMSCP::EventManager->getInstance()->register( 'afterHttpdBuildConf', sub { $self->_onAfterHttpdBuildConf( @_ ); } );
 
     $self;
@@ -307,22 +307,17 @@ sub _addCertificate
 
     # Fake out the SSL_SUPPORT in the Domains module by updating the ssl_certs table and creating a fake cert file
     my $rs = 0;
-    # REVIEW: Why do we care what the status is? Just existing should be fine.
     my $ssl_cert = $self->{'db'}->doQuery(
-        'domain_id', 'SELECT * FROM ssl_certs WHERE domain_type = ? AND domain_id = ? AND status = ?',
-        'dmn', $domainId, 'ok'
+        'domain_id', 'SELECT * FROM ssl_certs WHERE domain_type = ? AND domain_id = ?',
+        'dmn', $domainId
     );
     if (exists $ssl_cert->{$domainId}) {
-        debug('updating');
-        # print Dumper($ssl_cert);
         $rs = $self->{'db'}->doQuery(
             'u',
             "UPDATE ssl_certs SET status = 'ok' WHERE domain_type = ? AND domain_id = ? ",
             'dmn', $domainId
         );
     } else {
-        debug('inserting');
-        print Dumper($ssl_cert);
         $rs = $self->{'db'}->doQuery(
             'i',
             "INSERT INTO ssl_certs (status, domain_type, domain_id) VALUES ('ok', ?, ?)",
@@ -350,7 +345,20 @@ sub _addCertificate
     debug( $stdout ) if $stdout;     
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
-    $rs = $self->{'db'}->doQuery(
+    $self->_triggerDomainOnChange($domainId);
+ 
+    # my $rs = $self->_deleteCertificate( $domainId, $aliasId, $domain );
+    # return $rs if $rs;
+
+    0;
+}
+
+sub _triggerDomainOnChange
+{
+    my ($self, $domainId) = @_;
+
+    # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
+    my $rs = $self->{'db'}->doQuery(
         'u',
         "UPDATE domain SET domain_status = 'toadd' WHERE domain_id = ? ",
         $domainId
@@ -359,39 +367,6 @@ sub _addCertificate
         error( $rs );
         return 1;
     }
- 
-    # my $rs = $self->_deleteCertificate( $domainId, $aliasId, $domain );
-    # return $rs if $rs;
-
-    0;
-}
-
-=item _onBeforeHttpdAddDmn($domainId, $aliasId, $domain)
-
- Param Hash %data Domain data as per the Domains module
- Return int 0 on success, other on failure
-
-=cut
-
-sub _onBeforeHttpdAddDmn
-{
-    my ($self, $data) = @_;
-    # debug("_onBeforeHttpdAddDmn $data");
-    0;
-}
-
-=item _onBeforeHttpdBuildConf($cfgTpl, $filename, $data)
-
- Param Hash %data Domain data as per the Domains module
- Return int 0 on success, other on failure
-
-=cut
-
-sub _onBeforeHttpdBuildConf
-{
-    my ($self, $cfgTpl, $filename, $data) = @_;
-    debug("_onBeforeHttpdBuildConf ");
-    # print Dumper($data);
 
     0;
 }
@@ -407,9 +382,6 @@ sub _onAfterHttpdBuildConf
 {
     my ($self, $cfgTpl, $filename, $data) = @_;
     return unless $filename eq 'domain_ssl.tpl';
-    debug("_onAfterHttpdBuildConf ");
-    # print Dumper($filename, $data, $cfgTpl);
-    # print Dumper($data);
 
     my $domain = $data->{'DOMAIN_NAME'};
     my $domain_store_path = '/etc/letsencrypt/live/' . $domain . '/';
@@ -430,12 +402,43 @@ EOF
 
     $$cfgTpl =~ s/^\s+SSLEngine.*^\n/$snippet/sm;
 
-    # print Dumper($cfgTpl);
+    0;
+}
+
+=item _updateForward($domainId, $certName, $doForward)
+
+ Updates the forward (redirect) status of the domain 'certName' to enable
+ either http or the redirect of http -> https for the domain.
+
+ Param int $domainId Domain unique identifier
+ Param string $certName Primary name of the target certificate / domain
+ Param boolean $doForward True to do the forward / redirect
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _updateForward
+{
+    my ($self, $domainId, $certName, $doForward) = @_;
+
+    # Update the domains table with the forward info
+    my $hsts = ($doForward eq '1') ? 'on' : 'off';
+    my $rs = $self->{'db'}->doQuery(
+        'u',
+        "UPDATE ssl_certs SET allow_hsts = ? WHERE domain_id = ? ",
+        $hsts, $domainId
+    );
+    unless (ref $rs eq 'HASH') {
+        error( $rs );
+        return 1;
+    }
+
+    # This requires a rebuild of the domain, but assume that this is triggered elsewhere
 
     0;
 }
 
-=item _deleteCertificate($domainId, $aliasId, $domain)
+=item _deleteCertificate($domainId, $certName, $aliasId, $domain)
 
  Removes LetsEncrypt SSL certificate from the domain
 
@@ -466,15 +469,7 @@ sub _deleteCertificate
     $certificate->delFile();
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
-    $rs = $self->{'db'}->doQuery(
-        'u',
-        "UPDATE domain SET domain_status = 'toadd' WHERE domain_id = ? ",
-        $domainId
-    );
-    unless (ref $rs eq 'HASH') {
-        error( $rs );
-        return 1;
-    }
+    $self->_triggerDomainOnChange($domainId);
  
     0;
 }

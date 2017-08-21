@@ -113,7 +113,7 @@ function letsencrypt_edit_generatePage($tpl)
 
     if (empty($_POST)) {
         $enabled = $data['status'] === 'ok';
-        $http_forward = $data['http_forward'];
+        $http_forward = $data['http_forward'] == 1;
     } else {
         $enabled = (isset($_POST['enabled']) && $_POST['enabled'] == 'yes') ? true : false;
         $http_forward = (isset($_POST['http_forward']) && $_POST['http_forward'] == 'yes') ? true : false;
@@ -148,19 +148,6 @@ function client_editLetsEncrypt()
 
     if ($data === false) {
         showBadRequestErrorPage();
-    }
-
-    // Check that http_foward is no if enabled is no
-    if (isset($_POST['http_forward']) && $_POST['http_forward'] == 'yes') {
-        if (isset($_POST['http_forward']) && $_POST['http_forward'] == 'no') {
-            showBadRequestErrorPage();
-        }
-    }
-
-    $status = $_POST['enabled'] == 'yes' ? 'ok' : 'disabled'; // Our new status that we aspire to.
-    if ($status == $data['status']) {
-        // No change return early
-        return true;
     }
 
     $status = $_POST['enabled'] == 'yes' ? 'toadd' : 'todelete';
