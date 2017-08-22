@@ -335,11 +335,12 @@ sub _addCertificate
     $certificate->save();
 
     # Call certbot-auto to create the key and certificate under /etc/letsencrypt
-    my $certbot = $main::imscpConfig{'PLUGINS_DIR'}.'/LetsEncrypt/backend/certbot-auto-test.pm';
+    # my $certbot = $main::imscpConfig{'PLUGINS_DIR'}.'/LetsEncrypt/backend/certbot-auto-test.pm';
+    my $certbot = 'certbot-auto';
     my ($stdout, $stderr);
     # TODO May want to put a check on domain type of 'dmn' before also doing www.$certName CP 2017-08
     execute(
-        $certbot . " --no-bootstrap --no-self-update --non-interactive -v -d " . escapeShell($certName) . " -d " . escapeShell('www.' . $certName),
+        $certbot . " certonly --apache --no-bootstrap --non-interactive -v -d " . escapeShell($certName), # . " -d " . escapeShell('www.' . $certName),
         \$stdout, \$stderr
     ) == 0 or die( $stderr || 'Unknown error' );
     debug( $stdout ) if $stdout;     
@@ -385,9 +386,9 @@ sub _onAfterHttpdBuildConf
 
     my $domain = $data->{'DOMAIN_NAME'};
     my $domain_store_path = '/etc/letsencrypt/live/' . $domain . '/';
-    my $key_file = $domain_store_path . $domain . '.key';
-    my $cert_file = $domain_store_path . $domain . '.pem';
-    my $chain_file = $domain_store_path . $domain . '_chain.pem'; # TODO What is this really? CP 2017-08
+    my $key_file = $domain_store_path . 'privkey.pem';
+    my $cert_file = $domain_store_path . 'fullchain.pem';
+    my $chain_file = $domain_store_path . 'chain.pem'; # TODO What is this really? CP 2017-08
 
     my $snippet = <<EOF;
 
