@@ -21,7 +21,7 @@
 return array(
     'up'   => '
         CREATE TABLE IF NOT EXISTS `letsencrypt` (
-            `letsencrypt_id` int(11) unsigned NOT NULL,
+            `letsencrypt_id` int(11) unsigned NOT NULL AUTO_INCREMENT,
             `admin_id` int(11) unsigned NOT NULL,
             `domain_id` int(11) unsigned NOT NULL,
             `alias_id` int(11) unsigned DEFAULT NULL,
