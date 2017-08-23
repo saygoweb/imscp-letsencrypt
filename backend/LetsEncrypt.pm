@@ -329,8 +329,12 @@ sub _addCertificate
         return 1;
     }
 
-    if (gethostbyname($certName)) or error ("Cannot resolve $certName");
-    $certNameWWW = 'www' . $certName;
+    if (!gethostbyname($certName)) {
+        error("Cannot resolve $certName");
+        return 1;
+    }
+
+    my $certNameWWW = 'www' . $certName;
     my $haveWWW = (gethostbyname($certNameWWW)) ? 1 : 0;
 
     # Create the fake cert file, its not valid PEM but that doesn't matter.
@@ -494,14 +498,7 @@ sub _letsencryptInstall
     }
     $file->mode(0755);
 
-    my ($stdout, $stderr);
-    # Attempt to install quietly
-    execute(
-        "/usr/local/bin/certbot-auto --non-interactive -v",
-        \$stdout, \$stderr
-    );
-
-    $cronContent = <<EOF;
+    my $cronContent = <<EOF;
 #!/bin/sh
 if [ -f /usr/sbin/csf ]; then
     /usr/sbin/csf -ta 0.0.0.0/0 180 -d out
@@ -516,6 +513,13 @@ EOF
     $cron->set($cronContent);
     $cron->save();
     $cron->mode(0755);
+
+    my ($stdout, $stderr);
+    # Attempt to install quietly
+    execute(
+        "/usr/local/bin/certbot-auto --non-interactive -v",
+        \$stdout, \$stderr
+    );
 
     0;
 }
