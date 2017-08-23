@@ -20,16 +20,19 @@
 
 return array(
     'up'   => '
-        CREATE TABLE IF NOT EXISTS letsencrypt (
-            letsencrypt_id int(11) unsigned NOT NULL AUTO_INCREMENT,
-            admin_id int(11) unsigned NOT NULL,
-            domain_id int(11) unsigned NOT NULL,
-            alias_id int(11) unsigned NOT NULL,
-            domain_name varchar(255) COLLATE utf8_unicode_ci NOT NULL,
-            letsencrypt_status varchar(255) COLLATE utf8_unicode_ci NOT NULL,
+        CREATE TABLE IF NOT EXISTS `letsencrypt` (
+            `letsencrypt_id` int(11) unsigned NOT NULL AUTO_INCREMENT,
+            `admin_id` int(11) unsigned NOT NULL,
+            `domain_id` int(11) unsigned NOT NULL,
+            `alias_id` int(11) unsigned DEFAULT NULL,
+            `subdomain_id` int(11) unsigned DEFAULT NULL,
+            `cert_name` varchar(255) COLLATE utf8_unicode_ci NOT NULL,
+            `http_forward` tinyint(1) NOT NULL DEFAULT \'0\',
+            `status` varchar(255) COLLATE utf8_unicode_ci NOT NULL,
+            `state` varchar(255) COLLATE utf8_unicode_ci NOT NULL,
             PRIMARY KEY (letsencrypt_id),
             KEY letsencrypt_id (letsencrypt_id)
-        ) ENGINE=InnoDB  DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
     ',
     'down' => '
         DROP TABLE IF EXISTS letsencrypt

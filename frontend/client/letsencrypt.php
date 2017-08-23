@@ -38,52 +38,56 @@ use PDO;
  */
 function letsencrypt_generatePage($tpl)
 {
+
+    //SELECT * FROM `letsencrypt` LEFT JOIN `domain` ON letsencrypt.domain_id = domain.domain_id
+    // SELECT letsencrypt_id, cert_name, http_forward, status, state
+    // FROM letsencrypt
+    // WHERE admin_id = ?
     $stmt = exec_query(
         '
-            SELECT letsencrypt_id, domain_name, letsencrypt_status, domain_dns, domain_text
-            FROM letsencrypt LEFT JOIN domain_dns ON(
-                domain_dns.domain_id = letsencrypt.domain_id
-                AND domain_dns.alias_id = IFNULL(letsencrypt.alias_id, 0) AND owned_by = ?
-            ) WHERE admin_id = ?
+            SELECT domain.domain_id AS domain_id, domain_name, domain_admin_id, http_forward, status, state
+            FROM domain LEFT JOIN letsencrypt ON (
+                domain.domain_id=letsencrypt.domain_id
+            )
+            WHERE domain_admin_id = ?
         ',
-        array('LetsEncrypt_Plugin', $_SESSION['user_id'])
+        array($_SESSION['user_id'])
     );
 
     if ($stmt->rowCount()) {
         while ($row = $stmt->fetchRow(PDO::FETCH_ASSOC)) {
-            if ($row['letsencrypt_status'] == 'ok') {
+            if (!$row['status']) {
+                $row['status'] = 'disabled';
+            }
+            if ($row['status'] == 'ok') {
                 $statusIcon = 'ok';
-            } elseif ($row['letsencrypt_status'] == 'disabled') {
+            } elseif ($row['status'] == 'disabled') {
                 $statusIcon = 'disabled';
             } elseif (in_array(
-                $row['letsencrypt_status'],
-                array('toadd', 'tochange', 'todelete', 'torestore', 'tochange', 'toenable', 'todisable', 'todelete'))
+                $row['status'],
+                array('toadd', 'tochange', 'todelete', 'torestore', 'toenable', 'todisable'))
             ) {
                 $statusIcon = 'reload';
             } else {
                 $statusIcon = 'error';
             }
 
-            if ($row['domain_text']) {
-                if (strpos($row['domain_dns'], ' ') !== false) {
-                    $dnsName = explode(' ', $row['domain_dns']);
-                    $dnsName = $dnsName[0];
-                } else {
-                    $dnsName = $row['domain_dns'];
-                }
-            } else {
-                $dnsName = '';
-            }
+            $type = 'domain';
+            $id = $row['domain_id'];
+            $domain_name = decode_idna($row['domain_name']);
 
             $tpl->assign(array(
-                'DOMAIN_NAME' => decode_idna($row['domain_name']),
-                'DOMAIN_KEY'  => ($row['domain_text']) ? tohtml($row['domain_text']) : tr('Generation in progress.'),
-                'LETSENCRYPT_ID' => $row['letsencrypt_id'],
-                'DNS_NAME'    => ($dnsName) ? tohtml($dnsName) : tr('n/a'),
-                'STATUS'  => translate_dmn_status($row['letsencrypt_status']),
-                'STATUS_ICON' => $statusIcon
+                'DOMAIN_NAME'      => decode_idna($row['domain_name']),
+                'ID'               => $row['domain_id'],
+                'NOTE'             => $row['state'] ? $row['state'] : '',
+                'EDIT'             => tr('Edit'),
+                'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $type . '&id=' . $id,
+                'STATUS'           => translate_dmn_status($row['status']), // TODO Improve the translation for ssl CP 2017-07
+                'STATUS_ICON'      => $statusIcon,
+                'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
+                'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO
             ));
-            $tpl->parse('DOMAINKEY_ITEM', '.domainkey_item');
+            $tpl->parse('DOMAINKEY_ITEM', 'domainkey_item'); // TODO
         }
     } else {
         $tpl->assign('CUSTOMER_LIST', '');
@@ -111,11 +115,12 @@ $tpl->define_dynamic(array(
     'domainkey_item' => 'customer_list'
 ));
 $tpl->assign(array(
-    'TR_PAGE_TITLE'  => tr('Customers / LetsEncrypt'),
-    'TR_DOMAIN_NAME' => tr('Domain'),
-    'TR_NOTE'        => tr('Notes'),
-    'TR_ENABLED'     => tr('Enabled'),
-    'TR_STATUS'      => tr('Status')
+    'TR_PAGE_TITLE'   => tr('Customers / LetsEncrypt'),
+    'TR_ACTION'       => tr('Actions'),
+    'TR_DOMAIN_NAME'  => tr('Domain'),
+    'TR_HTTP_FORWARD' => tr('Forward to SSL'),
+    'TR_NOTE'         => tr('Notes'),
+    'TR_STATUS'       => tr('Status')
 ));
 
 generateNavigation($tpl);

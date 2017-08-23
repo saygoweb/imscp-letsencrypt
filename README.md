@@ -1,38 +1,21 @@
-# i-MSCP LetsEncrypt plugin v.1.0
+# i-MSCP LetsEncrypt Plugin
 
 Plugin that provides domains with LetsEncrypt SSL certificates.
 
-## Introduction
+See [Changelog](CHANGELOG.md) for a detailed description of what has changed in each version.
 
 ## Requirements
 
 * i-MSCP 1.3.x
-
-### Debian / Ubuntu packages
-
-* wget
-
-You can install these packages by running the following command:
-
-```
-# apt-get update
-# apt-get install wget
-```
 
 ## Installation
 
 1. Upload the plugin through the plugin management interface
 2. Install the plugin through the plugin management interface
 
-## Update
+## Limitations
 
-1. Be sure that all requirements as stated in the requirements section are met
-2. Backup your plugin configuration file if needed
-3. Upload the plugin through the plugin management interface
-4. Restore your plugin configuration file if needed (compare it with the new version first)
-5. Update the plugin list through the plugin management interface
-
-## Configuration
+* Only works for domains, not sub-domains or aliases.  Its a future feature.
 
 ## License
 

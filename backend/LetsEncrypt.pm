@@ -28,14 +28,17 @@ use warnings;
 use iMSCP::Database;
 use iMSCP::Debug;
 use iMSCP::Dir;
+use iMSCP::EventManager;
 use iMSCP::Execute;
 use iMSCP::File;
 use iMSCP::Rights;
 use iMSCP::Service;
 use iMSCP::TemplateParser;
-use Servers::mta;
+use Servers::httpd;
 use version;
 use parent 'Common::SingletonClass';
+
+use Data::Dumper;
 
 =head1 DESCRIPTION
 
@@ -204,12 +207,12 @@ sub run
 {
     my $self = shift;
 
-    # TODO Find the domains for which we need to generate certificates
+    # Find the domains for which we need to generate certificates
     my $rows = $self->{'db'}->doQuery(
         'letsencrypt_id',
         "
-            SELECT letsencrypt_id, domain_id, IFNULL(alias_id, 0) AS alias_id, domain_name, letsencrypt_status
-            FROM letsencrypt WHERE letsencrypt_status IN('toadd', 'tochange', 'todelete')
+            SELECT letsencrypt_id, domain_id, alias_id, subdomain_id, cert_name, http_forward, status
+            FROM letsencrypt WHERE status IN('toadd', 'tochange', 'todelete')
         "
     );
     unless (ref $rows eq 'HASH') {
@@ -219,24 +222,27 @@ sub run
 
     my @sql;
     for(values %{$rows}) {
-        if ($_->{'letsencrypt_status'} =~ /^to(?:add|change)$/) {
-            my $rs = $self->_addCertificate( $_->{'domain_id'}, $_->{'alias_id'}, $_->{'domain_name'} );
+        if ($_->{'status'} =~ /^to(?:add|change)$/) {
+            my $rs = $self->_addCertificate( $_->{'domain_id'}, $_->{'cert_name'}, $_->{'alias_id'}, $_->{'subdomain_id'} );
+            $rs |= $self->_updateForward(  $_->{'domain_id'}, $_->{'cert_name'}, $_->{'http_forward'} );
             @sql = (
-                'UPDATE letsencrypt SET letsencrypt_status = ? WHERE letsencrypt_id = ?',
+                'UPDATE letsencrypt SET status = ? WHERE letsencrypt_id = ?',
                 ($rs ? scalar getMessageByType( 'error' ) || 'Unknown error' : 'ok'), $_->{'letsencrypt_id'}
             );
-        } elsif ($_->{'letsencrypt_status'} eq 'todelete') {
-            my $rs = $self->_deleteCertificate( $_->{'domain_id'}, $_->{'alias_id'}, $_->{'domain_name'} );
+        } elsif ($_->{'status'} eq 'todelete') {
+            my $rs = $self->_deleteCertificate( $_->{'domain_id'}, $_->{'cert_name'}, $_->{'alias_id'}, $_->{'subdomain_id'} );
+            $rs |= $self->_updateForward(  $_->{'domain_id'}, $_->{'cert_name'}, 0 );
             if ($rs) {
                 @sql = (
-                    'UPDATE letsencrypt SET letsencrypt_status = ? WHERE letsencrypt_id = ?',
+                    'UPDATE letsencrypt SET status = ? WHERE letsencrypt_id = ?',
                     (scalar getMessageByType( 'error' ) || 'Unknown error'), $_->{'letsencrypt_id'}
                 );
             } else {
                 @sql = ('DELETE FROM letsencrypt WHERE letsencrypt_id = ?', $_->{'letsencrypt_id'});
             }
         }
-
+        # Update the status of the last operation
+        # Comment out the below for dev testing CP 2017-06
         my $qrs = $self->{'db'}->doQuery( 'dummy', @sql );
         unless (ref $qrs eq 'HASH') {
             error( $qrs );
@@ -266,12 +272,24 @@ sub _init
     my $self = shift;
 
     $self->{'db'} = iMSCP::Database->factory();
+    $self->{'httpd'} = Servers::httpd->factory();
+
+    $self->{'certsDir'} = "$main::imscpConfig{'GUI_ROOT_DIR'}/data/certs";
+    my $rs = iMSCP::Dir->new( dirname => $self->{'certsDir'} )->make(
+        { mode => 0750, user => $main::imscpConfig{'ROOT_USER'}, group => $main::imscpConfig{'ROOT_GROUP'} }
+    );
+    fatal( sprintf( 'Could not create %s SSL certificate directory', $self->{'certsDir'} ) ) if $rs;
+
+    iMSCP::EventManager->getInstance()->register( 'afterHttpdBuildConf', sub { $self->_onAfterHttpdBuildConf( @_ ); } );
+
     $self;
 }
 
-=item _addCertificate($domainId, $aliasId, $domain)
+=item _addCertificate($domainId, $certName, $aliasId, $subdomainId)
 
  Adds LetsEncrypt SSL certificate to the given domain or alias
+
+ This assumes that the domain is currently active and enabled for http.
 
  Param int $domainId Domain unique identifier
  Param int $aliasId Domain alias unique identifier ( 0 if no domain alias )
@@ -282,9 +300,66 @@ sub _init
 
 sub _addCertificate
 {
-    my ($self, $domainId, $aliasId, $domain) = @_;
-
+    my ($self, $domainId, $certName, $aliasId, $subdomainId) = @_;
     # This action must be idempotent ( this allow to handle 'tochange' status which include key renewal )
+
+    debug("_addCertificate ");
+
+    # Fake out the SSL_SUPPORT in the Domains module by updating the ssl_certs table and creating a fake cert file
+    my $rs = 0;
+    my $ssl_cert = $self->{'db'}->doQuery(
+        'domain_id', 'SELECT * FROM ssl_certs WHERE domain_type = ? AND domain_id = ?',
+        'dmn', $domainId
+    );
+    if (exists $ssl_cert->{$domainId}) {
+        $rs = $self->{'db'}->doQuery(
+            'u',
+            "UPDATE ssl_certs SET status = 'ok' WHERE domain_type = ? AND domain_id = ? ",
+            'dmn', $domainId
+        );
+    } else {
+        $rs = $self->{'db'}->doQuery(
+            'i',
+            "INSERT INTO ssl_certs (status, domain_type, domain_id) VALUES ('ok', ?, ?)",
+            'dmn', $domainId
+        );
+    }
+    unless (ref $rs eq 'HASH') {
+        error( $rs );
+        return 1;
+    }
+
+    if (!gethostbyname($certName)) {
+        error("Cannot resolve $certName");
+        return 1;
+    }
+
+    # Create the fake cert file, its not valid PEM but that doesn't matter.
+    my $certificate = iMSCP::File->new( filename => "$main::imscpConfig{'GUI_ROOT_DIR'}/data/certs/$certName.pem");
+    $certificate->set('LetsEncrypt Dummy Certificate');
+    $certificate->save();
+
+    my $certNameWWW = 'www.' . $certName;
+    my $haveWWW = gethostbyname($certNameWWW) ? 1 : 0;
+
+    # Call certbot-auto to create the key and certificate under /etc/letsencrypt
+    # my $certbot = $main::imscpConfig{'PLUGINS_DIR'}.'/LetsEncrypt/backend/certbot-auto-test.pm';
+    my $certbot = 'certbot-auto';
+    my ($stdout, $stderr);
+    my $command = $certbot . " certonly --apache --no-bootstrap --non-interactive -v -d " . escapeShell($certName);
+    if ($haveWWW) {
+        $command = $command . " -d " . escapeShell($certNameWWW);
+    }
+    $rs = execute(
+        $command,
+        \$stdout, \$stderr
+    );
+    debug( $command );
+    debug( $stdout ) if $stdout;     
+    $rs == 0 or die( $stderr || "unknown error $rs" );
+
+    # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
+    $self->_triggerDomainOnChange($domainId);
  
     # my $rs = $self->_deleteCertificate( $domainId, $aliasId, $domain );
     # return $rs if $rs;
@@ -292,7 +367,92 @@ sub _addCertificate
     0;
 }
 
-=item _deleteCertificate($domainId, $aliasId, $domain)
+sub _triggerDomainOnChange
+{
+    my ($self, $domainId) = @_;
+
+    # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
+    my $rs = $self->{'db'}->doQuery(
+        'u',
+        "UPDATE domain SET domain_status = 'toadd' WHERE domain_id = ? ",
+        $domainId
+    );
+    unless (ref $rs eq 'HASH') {
+        error( $rs );
+        return 1;
+    }
+
+    0;
+}
+
+=item _onAfterHttpdBuildConf($cfgTpl, $filename, $data)
+
+ Param Hash %data Domain data as per the Domains module
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _onAfterHttpdBuildConf
+{
+    my ($self, $cfgTpl, $filename, $data) = @_;
+    return unless $filename eq 'domain_ssl.tpl';
+
+    my $domain = $data->{'DOMAIN_NAME'};
+    my $domain_store_path = '/etc/letsencrypt/live/' . $domain . '/';
+    my $key_file = $domain_store_path . 'privkey.pem';
+    my $cert_file = $domain_store_path . 'fullchain.pem';
+    my $chain_file = $domain_store_path . 'chain.pem'; # TODO What is this really? CP 2017-08
+
+    my $snippet = <<EOF;
+
+    SSLEngine On
+    SSLCertificateFile _CERTIFICATEFILE_
+    SSLCertificateKeyFile _CERTIFICATEKEYFILE_
+
+EOF
+
+    $snippet =~ s/_CERTIFICATEFILE_/$cert_file/g;
+    $snippet =~ s/_CERTIFICATEKEYFILE_/$key_file/g;
+
+    $$cfgTpl =~ s/^\s+SSLEngine.*^\n/$snippet/sm;
+
+    0;
+}
+
+=item _updateForward($domainId, $certName, $doForward)
+
+ Updates the forward (redirect) status of the domain 'certName' to enable
+ either http or the redirect of http -> https for the domain.
+
+ Param int $domainId Domain unique identifier
+ Param string $certName Primary name of the target certificate / domain
+ Param boolean $doForward True to do the forward / redirect
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _updateForward
+{
+    my ($self, $domainId, $certName, $doForward) = @_;
+
+    # Update the domains table with the forward info
+    my $hsts = ($doForward eq '1') ? 'on' : 'off';
+    my $rs = $self->{'db'}->doQuery(
+        'u',
+        "UPDATE ssl_certs SET allow_hsts = ? WHERE domain_id = ? ",
+        $hsts, $domainId
+    );
+    unless (ref $rs eq 'HASH') {
+        error( $rs );
+        return 1;
+    }
+
+    # This requires a rebuild of the domain, but assume that this is triggered elsewhere
+
+    0;
+}
+
+=item _deleteCertificate($domainId, $certName, $aliasId, $domain)
 
  Removes LetsEncrypt SSL certificate from the domain
 
@@ -304,7 +464,26 @@ sub _addCertificate
 
 sub _deleteCertificate
 {
-    my ($self, $domainId, $aliasId, $domain) = @_;
+    my ($self, $domainId, $certName, $aliasId, $domain) = @_;
+
+    # Fake out the SSL_SUPPORT in the Domains module by updating the ssl_certs table and creating a fake cert file
+    my $rs = 0;
+    $rs = $self->{'db'}->doQuery(
+        'i',
+        "DELETE FROM ssl_certs WHERE domain_type = ? AND domain_id = ?",
+        'dmn', $domainId
+    );
+    unless (ref $rs eq 'HASH') {
+        error( $rs );
+        return 1;
+    }
+
+    # Delete the fake cert file, its not valid PEM but that doesn't matter.
+    my $certificate = iMSCP::File->new( filename => "$main::imscpConfig{'GUI_ROOT_DIR'}/data/certs/$certName.pem");
+    $certificate->delFile();
+
+    # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
+    $self->_triggerDomainOnChange($domainId);
  
     0;
 }
@@ -319,7 +498,35 @@ sub _deleteCertificate
 
 sub _letsencryptInstall
 {
-    # TODO :-)
+    my $file = iMSCP::File->new( filename => '/usr/local/bin/certbot-auto' );
+    if (not -e $file->{filename}) {
+        execute('wget --no-check-certificate https://dl.eff.org/certbot-auto -P /usr/local/bin/');
+    }
+    $file->mode(0755);
+
+    my $cronContent = <<EOF;
+#!/bin/sh
+if [ -f /usr/sbin/csf ]; then
+    /usr/sbin/csf -ta 0.0.0.0/0 180 -d out
+fi
+/usr/local/bin/certbot-auto renew --quiet --no-self-upgrade
+if [ -f /usr/sbin/csf ]; then
+    /usr/sbin/csf -tr 0.0.0.0/0
+fi
+EOF
+
+    my $cron = iMSCP::File->new("/etc/cron.weekly/letsencrypt");
+    $cron->set($cronContent);
+    $cron->save();
+    $cron->mode(0755);
+
+    my ($stdout, $stderr);
+    # Attempt to install quietly
+    execute(
+        "/usr/local/bin/certbot-auto --non-interactive -v",
+        \$stdout, \$stderr
+    );
+
     0;
 }
 
