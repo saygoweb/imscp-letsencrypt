@@ -329,6 +329,10 @@ sub _addCertificate
         return 1;
     }
 
+    if (gethostbyname($certName)) or error ("Cannot resolve $certName");
+    $certNameWWW = 'www' . $certName;
+    my $haveWWW = (gethostbyname($certNameWWW)) ? 1 : 0;
+
     # Create the fake cert file, its not valid PEM but that doesn't matter.
     my $certificate = iMSCP::File->new( filename => "$main::imscpConfig{'GUI_ROOT_DIR'}/data/certs/$certName.pem");
     $certificate->set('LetsEncrypt Dummy Certificate');
@@ -338,9 +342,8 @@ sub _addCertificate
     # my $certbot = $main::imscpConfig{'PLUGINS_DIR'}.'/LetsEncrypt/backend/certbot-auto-test.pm';
     my $certbot = 'certbot-auto';
     my ($stdout, $stderr);
-    # TODO May want to put a check on domain type of 'dmn' before also doing www.$certName CP 2017-08
     execute(
-        $certbot . " certonly --apache --no-bootstrap --non-interactive -v -d " . escapeShell($certName), # . " -d " . escapeShell('www.' . $certName),
+        $certbot . " certonly --apache --no-bootstrap --non-interactive -v -d " . escapeShell($certName) . ($haveWWW) ? " -d $certNameWWW" : '',
         \$stdout, \$stderr
     ) == 0 or die( $stderr || 'Unknown error' );
     debug( $stdout ) if $stdout;     
@@ -490,6 +493,30 @@ sub _letsencryptInstall
         execute('wget --no-check-certificate https://dl.eff.org/certbot-auto -P /usr/local/bin/');
     }
     $file->mode(0755);
+
+    my ($stdout, $stderr);
+    # Attempt to install quietly
+    execute(
+        "/usr/local/bin/certbot-auto --non-interactive -v",
+        \$stdout, \$stderr
+    );
+
+    $cronContent = <<EOF;
+#!/bin/sh
+if [ -f /usr/sbin/csf ]; then
+    /usr/sbin/csf -ta 0.0.0.0/0 180 -d out
+fi
+/usr/local/bin/certbot-auto renew --quiet --no-self-upgrade
+if [ -f /usr/sbin/csf ]; then
+    /usr/sbin/csf -tr 0.0.0.0/0
+fi
+EOF
+
+    my $cron = iMSCP::File->new("/etc/cron.weekly/letsencrypt");
+    $cron->set($cronContent);
+    $cron->save();
+    $cron->mode(0755);
+
     0;
 }
 
