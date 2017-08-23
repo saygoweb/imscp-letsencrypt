@@ -67,7 +67,7 @@ function _client_getEditData($type, $id)
     }
 
     $data = $stmt->fetchRow(PDO::FETCH_ASSOC);
-    if (!$data['letsencrypt_id']) {
+    if ($data['letsencrypt_id'] == null) {
         $db = iMSCP_Database::getInstance();
 
         // Set default values
