@@ -38,7 +38,7 @@ use Servers::httpd;
 use version;
 use parent 'Common::SingletonClass';
 
-# use Data::Dumper;
+use Data::Dumper;
 
 =head1 DESCRIPTION
 
@@ -334,23 +334,29 @@ sub _addCertificate
         return 1;
     }
 
-    my $certNameWWW = 'www' . $certName;
-    my $haveWWW = (gethostbyname($certNameWWW)) ? 1 : 0;
-
     # Create the fake cert file, its not valid PEM but that doesn't matter.
     my $certificate = iMSCP::File->new( filename => "$main::imscpConfig{'GUI_ROOT_DIR'}/data/certs/$certName.pem");
     $certificate->set('LetsEncrypt Dummy Certificate');
     $certificate->save();
 
+    my $certNameWWW = 'www.' . $certName;
+    my $haveWWW = gethostbyname($certNameWWW) ? 1 : 0;
+
     # Call certbot-auto to create the key and certificate under /etc/letsencrypt
     # my $certbot = $main::imscpConfig{'PLUGINS_DIR'}.'/LetsEncrypt/backend/certbot-auto-test.pm';
     my $certbot = 'certbot-auto';
     my ($stdout, $stderr);
-    execute(
-        $certbot . " certonly --apache --no-bootstrap --non-interactive -v -d " . escapeShell($certName) . ($haveWWW) ? " -d $certNameWWW" : '',
+    my $command = $certbot . " certonly --apache --no-bootstrap --non-interactive -v -d " . escapeShell($certName);
+    if ($haveWWW) {
+        $command = $command . " -d " . escapeShell($certNameWWW);
+    }
+    $rs = execute(
+        $command,
         \$stdout, \$stderr
-    ) == 0 or die( $stderr || 'Unknown error' );
+    );
+    debug( $command );
     debug( $stdout ) if $stdout;     
+    $rs == 0 or die( $stderr || "unknown error $rs" );
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
     $self->_triggerDomainOnChange($domainId);
