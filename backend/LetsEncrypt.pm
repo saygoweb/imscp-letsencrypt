@@ -111,7 +111,7 @@ sub update
     my $rs = 0;
 
     # Re-run the installer just in case
-    $rs ||= letsencryptInstall();
+    $rs ||= $self->_letsencryptInstall();
     $rs ||= $self->_letsencryptConfig( 'configure' );
 
     # Trigger a rebuild on all domains with LetsEncrypt enabled
