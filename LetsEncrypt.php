@@ -136,10 +136,10 @@ class iMSCP_Plugin_LetsEncrypt extends iMSCP_Plugin_Action
      */
     public function onAfterDeleteCustomer(iMSCP_Events_Event $event)
     {
-        exec_query(
-            'UPDATE letsencrypt SET letsencrypt_status = ? WHERE customer_id = ?',
-            array('todelete', $event->getParam('customerId'))
-        );
+        // exec_query(
+        //     'UPDATE letsencrypt SET letsencrypt_status = ? WHERE customer_id = ?',
+        //     array('todelete', $event->getParam('customerId'))
+        // );
     }
 
     /**
