@@ -400,19 +400,21 @@ sub _onAfterHttpdBuildConf
     my $domain = $data->{'DOMAIN_NAME'};
     my $domain_store_path = '/etc/letsencrypt/live/' . $domain . '/';
     my $key_file = $domain_store_path . 'privkey.pem';
-    my $cert_file = $domain_store_path . 'fullchain.pem';
-    my $chain_file = $domain_store_path . 'chain.pem'; # TODO What is this really? CP 2017-08
+    my $cert_file = $domain_store_path . 'cert.pem';
+    my $chain_file = $domain_store_path . 'chain.pem';
 
     my $snippet = <<EOF;
 
     SSLEngine On
     SSLCertificateFile _CERTIFICATEFILE_
     SSLCertificateKeyFile _CERTIFICATEKEYFILE_
+    SSLCertificateChainFile _CERTIFICATECHAINFILE_
 
 EOF
 
     $snippet =~ s/_CERTIFICATEFILE_/$cert_file/g;
     $snippet =~ s/_CERTIFICATEKEYFILE_/$key_file/g;
+    $snippet =~ s/_CERTIFICATECHAINFILE_/$chain_file/g;
 
     $$cfgTpl =~ s/^\s+SSLEngine.*^\n/$snippet/sm;
 
