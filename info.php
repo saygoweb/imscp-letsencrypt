@@ -21,7 +21,7 @@
 return array(
     'author' => 'Cambell Prince',
     'email' => 'cambell.prince@gmail.com',
-    'version' => '1.0.0',
+    'version' => '1.0.1',
     'require_api' => '1.0.5',
     'date' => '2017-08-23',
     'name' => 'LetsEncrypt',
