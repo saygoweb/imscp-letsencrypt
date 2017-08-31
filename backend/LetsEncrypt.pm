@@ -108,17 +108,32 @@ sub uninstall
 sub update
 {
     my ($self, $fromVersion) = @_;
+    my $rs = 0;
 
-    # if (version->parse( $fromVersion ) < version->parse( '1.1.1' )) {
-    #     my $rs = $self->{'db'}->doQuery( 'd', "DELETE FROM domain_dns WHERE owned_by = 'letsencrypt_feature'" );
-    #     unless (ref $rs eq 'HASH') {
-    #         error( $rs );
-    #         return $rs;
-    #     }
-    # }
-
-    my $rs = $self->_letsencryptInstall();
+    # Re-run the installer just in case
+    $rs ||= letsencryptInstall();
     $rs ||= $self->_letsencryptConfig( 'configure' );
+
+    # Trigger a rebuild on all domains with LetsEncrypt enabled
+    if (version->parse( $fromVersion ) < version->parse( '1.0.1' )) {
+        my $rows = $self->{'db'}->doQuery(
+            'letsencrypt_id',
+            "
+                SELECT letsencrypt_id, domain_id, alias_id, subdomain_id, cert_name, http_forward, status
+                FROM letsencrypt WHERE status IN('ok')
+            "
+        );
+        unless (ref $rows eq 'HASH') {
+            error( $rows );
+            return 1;
+        }
+
+        my @sql;
+        for(values %{$rows}) {
+            $rs ||= $self->_triggerDomainOnChange($_->{'domain_id'});
+        }
+    }
+
     return $rs if $rs;
 
     0;
