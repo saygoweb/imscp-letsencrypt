@@ -1,5 +1,10 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 1.0.2
+
+* Fix #2 Plugin blocked delete domain / customer
+* Fix #3 Full chain not delivered by Apache
+
 ## Version 1.0.0
 
 * Creates domain certificates
