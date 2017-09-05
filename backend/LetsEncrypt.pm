@@ -288,7 +288,7 @@ sub _init
 {
     my $self = shift;
 
-    $self->{'testmode'} = 1;
+    $self->{'testmode'} = 0;
 
     $self->{'db'} = iMSCP::Database->factory();
     $self->{'httpd'} = Servers::httpd->factory();
