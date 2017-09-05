@@ -4,7 +4,7 @@ Plugin that provides domains with LetsEncrypt SSL certificates.
 
 See [Changelog](CHANGELOG.md) for a detailed description of what has changed in each version.
 
->Disclaimer: This plugin is not likely to be that well supported.  It works for me, for what I need, right now. YMMV.  If you want a full featured supported plugin I recommend the [LetsEncrypt Plugin](https://i-mscp.net/filebase/index.php/File/33-LetsEncrypt/) from the iMSCP developers.
+>Disclaimer: This plugin is not likely to be that well supported.  It works for me, for what I need, right now. YMMV.  If you want a full featured supported plugin I would suggest the [LetsEncrypt Plugin](https://i-mscp.net/filebase/index.php/File/33-LetsEncrypt/) from the iMSCP developers.
 
 Testing and bug reports are welcome.
 
