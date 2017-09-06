@@ -17,6 +17,11 @@ Testing and bug reports are welcome.
 1. Upload the plugin through the plugin management interface
 2. Install the plugin through the plugin management interface
 
+## How to Help
+
+* Report issues you find in our [GitHub Issue Tracker](https://github.com/saygoweb/imscp-letsencrypt/issues). Please report with as much detail as you can. Simply saying "It doesn't work" will gain you sympathy, but not a lot else.
+* Want do contribute code? Go right ahead, fork the project on GitHub, pull requests are welcome.
+
 ## License
 
 ```
