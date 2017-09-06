@@ -17,10 +17,6 @@ Testing and bug reports are welcome.
 1. Upload the plugin through the plugin management interface
 2. Install the plugin through the plugin management interface
 
-## Limitations
-
-* Only works for domains, not sub-domains or aliases.  Its a future feature.
-
 ## License
 
 ```

@@ -1,5 +1,9 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 1.1.0
+
+* Implement #1 Support for aliases and subdomains
+
 ## Version 1.0.2
 
 * Fix #2 Plugin blocked delete domain / customer
@@ -13,4 +17,4 @@
 
 ### Known Limitations
 
-* Doesn't support subdomains or aliases
+* Doesn't support subdomains of aliases

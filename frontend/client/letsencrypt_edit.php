@@ -47,19 +47,69 @@ function _client_getEditData($type, $id)
         return $data;
     }
 
-    if ($type == 'domain') {
-        $stmt = exec_query(
-            '
-                SELECT domain.domain_id AS domain_id, domain_name, domain_admin_id, letsencrypt_id, cert_name, http_forward, status, state
-                FROM domain LEFT JOIN letsencrypt ON (
-                    domain.domain_id=letsencrypt.domain_id
-                )
-                WHERE domain.domain_id = ?
-            ',
-            array($id)
-        );
-    } else {
-        return false;
+    switch ($type) {
+        case 'domain':
+            $stmt = exec_query(
+                '
+                    SELECT domain.domain_id AS domain_id, domain_name, domain_admin_id, letsencrypt_id, cert_name, http_forward, status, state
+                    FROM domain
+                    LEFT JOIN letsencrypt ON (
+                        domain.domain_id=letsencrypt.domain_id
+                    )
+                    WHERE domain.domain_id = ?
+                ',
+                array($id)
+            );
+            break;
+        case 'alias':
+    //     '
+    //     SELECT domain_aliasses.alias_id AS alias_id, alias_name, domain_admin_id, http_forward, status, state
+    //     FROM domain
+    //     INNER JOIN domain_aliasses ON (domain.domain_id = domain_aliasses.domain_id)
+    //     LEFT JOIN letsencrypt ON (
+    //         domain_aliasses.alias_id=letsencrypt.alias_id
+    //     )
+    //     WHERE domain_admin_id = ?
+    // ',
+    // array($_SESSION['user_id'])
+            $stmt = exec_query(
+                '
+                    SELECT domain_aliasses.alias_id AS alias_id, alias_name, domain_admin_id, letsencrypt_id, cert_name, http_forward, status, state
+                    FROM domain
+                    INNER JOIN domain_aliasses ON (domain.domain_id = domain_aliasses.domain_id)
+                    LEFT JOIN letsencrypt ON (
+                        domain_aliasses.alias_id=letsencrypt.alias_id
+                    )
+                    WHERE domain_aliasses.alias_id = ?
+                ',
+                array($id)
+            );
+            break;
+        case 'subdomain':
+    //     '
+    //     SELECT subdomain.subdomain_id AS subdomain_id, subdomain_name, domain_name, domain_admin_id, http_forward, status, state
+    //     FROM domain
+    //     INNER JOIN subdomain ON (domain.domain_id = subdomain.domain_id)
+    //     LEFT JOIN letsencrypt ON (
+    //         subdomain.subdomain_id=letsencrypt.subdomain_id
+    //     )
+    //     WHERE domain_admin_id = ?
+    // ',
+            $stmt = exec_query(
+                '
+                    SELECT subdomain.subdomain_id AS subdomain_id, domain_name, subdomain_name, domain_admin_id, letsencrypt_id, cert_name, http_forward, status, state
+                    FROM domain
+                    INNER JOIN subdomain ON (domain.domain_id = subdomain.domain_id)
+                    LEFT JOIN letsencrypt ON (
+                        subdomain.subdomain_id=letsencrypt.subdomain_id
+                    )
+                    WHERE subdomain.subdomain_id = ?
+                ',
+                array($id)
+            );
+            break;
+        default:
+            return false;
     }
 
     if (!$stmt->rowCount()) {
@@ -70,20 +120,40 @@ function _client_getEditData($type, $id)
     if ($data['letsencrypt_id'] == null) {
         $db = iMSCP_Database::getInstance();
 
+        $domain_id = 0;
+        $alias_id = null;
+        $subdomain_id = null;
+        switch ($type) {
+            case 'domain':
+                $certname = $data['domain_name'];
+                $domain_id = $id;
+                break;
+            case 'alias':
+                $certname = $data['alias_name'];
+                $alias_id = $id;
+                break;
+            case 'subdomain':
+                $certname = $data['subdomain_name'] . '.' . $data['domain_name'];
+                $subdomain_id = $id;
+                break;
+            default:
+                throw new \Exception("Unsupported LetsEncrypt type '$type'");
+        }
+
         // Set default values
-        $data['cert_name'] = $data['domain_name'];
+        $data['cert_name'] = $certname;
         $data['http_forward'] = 0;
         $data['status'] = 'disabled';
         $data['state'] = '';
         exec_query(
             '
                 INSERT INTO letsencrypt (
-                    admin_id, domain_id, cert_name, http_forward, status, state
+                    admin_id, domain_id, alias_id, subdomain_id, cert_name, http_forward, status, state
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?
                 )
             ',
-            array($_SESSION['user_id'], $data['domain_id'], $data['cert_name'], $data['http_forward'], $data['status'], $data['state'])
+            array($_SESSION['user_id'], $domain_id, $alias_id, $subdomain_id, $data['cert_name'], $data['http_forward'], $data['status'], $data['state'])
         );
         $data['letsencrypt_id'] = $db->insertId();
     }

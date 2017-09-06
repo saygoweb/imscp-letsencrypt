@@ -35,6 +35,7 @@ use iMSCP::Rights;
 use iMSCP::Service;
 use iMSCP::TemplateParser;
 use Servers::httpd;
+use Socket;
 use version;
 use parent 'Common::SingletonClass';
 
@@ -237,16 +238,17 @@ sub run
 
     my @sql;
     for(values %{$rows}) {
+        my ($type, $id) = $self->_domainTypeAndId($_->{'domain_id'}, $_->{'alias_id'}, $_->{'subdomain_id'});
         if ($_->{'status'} =~ /^to(?:add|change)$/) {
-            my $rs = $self->_addCertificate( $_->{'domain_id'}, $_->{'cert_name'}, $_->{'alias_id'}, $_->{'subdomain_id'} );
-            $rs |= $self->_updateForward(  $_->{'domain_id'}, $_->{'cert_name'}, $_->{'http_forward'} );
+            my $rs = $self->_addCertificate( $type, $id, $_->{'cert_name'} );
+            $rs |= $self->_updateForward( $type, $id, $_->{'cert_name'}, $_->{'http_forward'} );
             @sql = (
                 'UPDATE letsencrypt SET status = ? WHERE letsencrypt_id = ?',
                 ($rs ? scalar getMessageByType( 'error' ) || 'Unknown error' : 'ok'), $_->{'letsencrypt_id'}
             );
         } elsif ($_->{'status'} eq 'todelete') {
-            my $rs = $self->_deleteCertificate( $_->{'domain_id'}, $_->{'cert_name'}, $_->{'alias_id'}, $_->{'subdomain_id'} );
-            $rs |= $self->_updateForward(  $_->{'domain_id'}, $_->{'cert_name'}, 0 );
+            my $rs = $self->_deleteCertificate( $type, $id, $_->{'cert_name'} );
+            $rs |= $self->_updateForward( $type, $id, $_->{'cert_name'}, 0 );
             if ($rs) {
                 @sql = (
                     'UPDATE letsencrypt SET status = ? WHERE letsencrypt_id = ?',
@@ -286,6 +288,8 @@ sub _init
 {
     my $self = shift;
 
+    $self->{'testmode'} = 0;
+
     $self->{'db'} = iMSCP::Database->factory();
     $self->{'httpd'} = Servers::httpd->factory();
 
@@ -298,6 +302,31 @@ sub _init
     iMSCP::EventManager->getInstance()->register( 'afterHttpdBuildConf', sub { $self->_onAfterHttpdBuildConf( @_ ); } );
 
     $self;
+}
+
+=item _domainTypeAndId($domainId, $aliasId, $subdomainId)
+
+ Returns ($domainType, $id)
+
+ It is expected that one and only one of the given ID's would be > 0
+
+ Param int $domainId Domain unique identifier ( 0 if this is not a domain )
+ Param int $aliasId Domain alias unique identifier ( 0 if no domain alias )
+ Param int $subdomainId Domain subdomain unique identifier ( 0 if no domain alias )
+
+=cut
+
+sub _domainTypeAndId
+{
+    my ($self, $domainId, $aliasId, $subdomainId) = @_;
+    if ($domainId > 0) {
+        return ('dmn', $domainId);
+    } elsif ($aliasId) {
+        return ('als', $aliasId);
+    } elsif ($subdomainId) {
+        return ('sub', $subdomainId);
+    }
+    return ('', 0);
 }
 
 =item _addCertificate($domainId, $certName, $aliasId, $subdomainId)
@@ -315,7 +344,7 @@ sub _init
 
 sub _addCertificate
 {
-    my ($self, $domainId, $certName, $aliasId, $subdomainId) = @_;
+    my ($self, $type, $id, $certName) = @_;
     # This action must be idempotent ( this allow to handle 'tochange' status which include key renewal )
 
     debug("_addCertificate ");
@@ -324,19 +353,19 @@ sub _addCertificate
     my $rs = 0;
     my $ssl_cert = $self->{'db'}->doQuery(
         'domain_id', 'SELECT * FROM ssl_certs WHERE domain_type = ? AND domain_id = ?',
-        'dmn', $domainId
+        $type, $id
     );
-    if (exists $ssl_cert->{$domainId}) {
+    if (exists $ssl_cert->{$id}) {
         $rs = $self->{'db'}->doQuery(
             'u',
             "UPDATE ssl_certs SET status = 'ok' WHERE domain_type = ? AND domain_id = ? ",
-            'dmn', $domainId
+            $type, $id
         );
     } else {
         $rs = $self->{'db'}->doQuery(
             'i',
             "INSERT INTO ssl_certs (status, domain_type, domain_id) VALUES ('ok', ?, ?)",
-            'dmn', $domainId
+            $type, $id
         );
     }
     unless (ref $rs eq 'HASH') {
@@ -344,12 +373,15 @@ sub _addCertificate
         return 1;
     }
 
-    if (!gethostbyname($certName)) {
+    # TODO This will not work for test domains (I think) CP 2017-09-05
+    # TODO This function can go to the type of the function CP 2017-09-05
+    if (!$self->{'testmode'} && !gethostbyname($certName)) {
         error("Cannot resolve $certName");
         return 1;
     }
 
     # Create the fake cert file, its not valid PEM but that doesn't matter.
+    # TODO Does this have to be before the certbot call? If not, we could put it below and use links. CP 2017-09-05
     my $certificate = iMSCP::File->new( filename => "$main::imscpConfig{'GUI_ROOT_DIR'}/data/certs/$certName.pem");
     $certificate->set('LetsEncrypt Dummy Certificate');
     $certificate->save();
@@ -358,8 +390,10 @@ sub _addCertificate
     my $haveWWW = gethostbyname($certNameWWW) ? 1 : 0;
 
     # Call certbot-auto to create the key and certificate under /etc/letsencrypt
-    # my $certbot = $main::imscpConfig{'PLUGINS_DIR'}.'/LetsEncrypt/backend/certbot-auto-test.pm';
     my $certbot = 'certbot-auto';
+    if ($self->{'testmode'}) {
+        $certbot = $main::imscpConfig{'PLUGINS_DIR'}.'/LetsEncrypt/backend/certbot-auto-test.pm';
+    }
     my ($stdout, $stderr);
     my $command = $certbot . " certonly --apache --no-bootstrap --non-interactive -v -d " . escapeShell($certName);
     if ($haveWWW) {
@@ -374,7 +408,7 @@ sub _addCertificate
     $rs == 0 or die( $stderr || "unknown error $rs" );
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
-    $self->_triggerDomainOnChange($domainId);
+    $self->_triggerDomainOnChange($type, $id);
  
     # my $rs = $self->_deleteCertificate( $domainId, $aliasId, $domain );
     # return $rs if $rs;
@@ -384,14 +418,32 @@ sub _addCertificate
 
 sub _triggerDomainOnChange
 {
-    my ($self, $domainId) = @_;
+    my ($self, $type, $id) = @_;
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
-    my $rs = $self->{'db'}->doQuery(
-        'u',
-        "UPDATE domain SET domain_status = 'toadd' WHERE domain_id = ? ",
-        $domainId
-    );
+    my $rs;
+    if ($type eq 'dmn') {
+        $rs = $self->{'db'}->doQuery(
+            'u',
+            "UPDATE domain SET domain_status = 'toadd' WHERE domain_id = ? ",
+            $id
+        );
+    } elsif ($type eq 'als') {
+        $rs = $self->{'db'}->doQuery(
+            'u',
+            "UPDATE domain_aliasses SET alias_status = 'toadd' WHERE alias_id = ? ",
+            $id
+        );
+    } elsif ($type eq 'sub') {
+        $rs = $self->{'db'}->doQuery(
+            'u',
+            "UPDATE subdomain SET subdomain_status = 'toadd' WHERE subdomain_id = ? ",
+            $id
+        );
+    } else {
+        error ( 'Unsupported domain type ' . $type);
+        return 2;
+    }
     unless (ref $rs eq 'HASH') {
         error( $rs );
         return 1;
@@ -436,7 +488,7 @@ EOF
     0;
 }
 
-=item _updateForward($domainId, $certName, $doForward)
+=item _updateForward($type, $id, $certName, $doForward)
 
  Updates the forward (redirect) status of the domain 'certName' to enable
  either http or the redirect of http -> https for the domain.
@@ -450,14 +502,14 @@ EOF
 
 sub _updateForward
 {
-    my ($self, $domainId, $certName, $doForward) = @_;
+    my ($self, $type, $id, $certName, $doForward) = @_;
 
     # Update the domains table with the forward info
     my $hsts = ($doForward eq '1') ? 'on' : 'off';
     my $rs = $self->{'db'}->doQuery(
         'u',
-        "UPDATE ssl_certs SET allow_hsts = ? WHERE domain_id = ? ",
-        $hsts, $domainId
+        "UPDATE ssl_certs SET allow_hsts = ? WHERE domain_type = ? AND domain_id = ? ",
+        $hsts, $type, $id
     );
     unless (ref $rs eq 'HASH') {
         error( $rs );
@@ -469,11 +521,12 @@ sub _updateForward
     0;
 }
 
-=item _deleteCertificate($domainId, $certName, $aliasId, $domain)
+=item _deleteCertificate($type, $id, $certName)
 
  Removes LetsEncrypt SSL certificate from the domain
 
- Param int $domainId Domain unique identifier
+ Param string $type Domain type (dmn|als|sub)
+ Param int $id Domain unique identifier
  Param int $aliasId Domain alias unique identifier (0 if no domain alias)
  Return int 0 on success, other on failure
 
@@ -481,14 +534,14 @@ sub _updateForward
 
 sub _deleteCertificate
 {
-    my ($self, $domainId, $certName, $aliasId, $domain) = @_;
+    my ($self, $type, $id, $certName) = @_;
 
     # Fake out the SSL_SUPPORT in the Domains module by updating the ssl_certs table and creating a fake cert file
     my $rs = 0;
     $rs = $self->{'db'}->doQuery(
         'i',
         "DELETE FROM ssl_certs WHERE domain_type = ? AND domain_id = ?",
-        'dmn', $domainId
+        $type, $id
     );
     unless (ref $rs eq 'HASH') {
         error( $rs );
@@ -497,10 +550,13 @@ sub _deleteCertificate
 
     # Delete the fake cert file, its not valid PEM but that doesn't matter.
     my $certificate = iMSCP::File->new( filename => "$main::imscpConfig{'GUI_ROOT_DIR'}/data/certs/$certName.pem");
-    $certificate->delFile();
+    debug($certificate->{'filename'});
+    if (-f $certificate->{'filename'}) {
+        $certificate->delFile();
+    }
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
-    $self->_triggerDomainOnChange($domainId);
+    $self->_triggerDomainOnChange($type, $id);
  
     0;
 }

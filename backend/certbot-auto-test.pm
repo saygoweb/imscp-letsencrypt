@@ -12,12 +12,15 @@ my $store_path = '/etc/letsencrypt/live/';
 # Pickup the domain name(s) from the -d options on the command line
 my $domain = 'test1.local';
 @options;
+#  certonly --apache --no-bootstrap --non-interactive -v -d
 GetOptions(
+    'apache', sub {  },
     'domain|d=s', sub { $domain = $_[1] },
     'no-bootstrap', sub {  },
     'non-interactive', sub {  },
     'no-self-update', sub {  },
     'verbose|v', sub {  },
+    'help|h', sub { showUsage(); },
     @options,
 ) or showUsage();
 
@@ -28,8 +31,9 @@ mkpath($store_path);
 $domain =~ s/www.//;
 
 my $domain_store_path = '/etc/letsencrypt/live/' . $domain;
-my $key_file = $domain_store_path . '/' . $domain . '.key';
-my $cert_file = $domain_store_path . '/' . $domain . '.pem';
+my $key_file = $domain_store_path . '/' . 'privkey.pem';
+my $cert_file = $domain_store_path . '/' . 'cert.pem';
+my $chain_file = $domain_store_path . '/' . 'chain.pem';
 
 # Ensure the domain store path exists
 mkpath($domain_store_path);
@@ -38,6 +42,8 @@ mkpath($domain_store_path);
 execute('openssl genrsa -out ' . $key_file . ' 2048');
 # Create the cert
 execute('openssl req -x509 -new -key ' . $key_file . ' -subj /CN=' . $domain . ' -days 3650 -out ' . $cert_file);
+# Create the chain
+execute('openssl req -x509 -new -key ' . $key_file . ' -subj /CN=' . $domain . ' -days 3650 -out ' . $chain_file);
 
 # Done
 
