@@ -65,31 +65,26 @@ function letsencrypt_generateDomains($tpl)
         array($_SESSION['user_id'])
     );
 
-    if ($stmt->rowCount()) {
-        while ($row = $stmt->fetchRow(PDO::FETCH_ASSOC)) {
-            if (!$row['status']) {
-                $row['status'] = 'disabled';
-            }
-            $statusIcon = letsencrypt_statusIcon($row['status']);
-            $type = 'domain';
-            $id = $row['domain_id'];
-
-            $tpl->assign(array(
-                'DOMAIN_NAME'      => decode_idna($row['domain_name']),
-                'ID'               => $row['domain_id'],
-                'NOTE'             => $row['state'] ? $row['state'] : '',
-                'EDIT'             => tr('Edit'),
-                'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $type . '&id=' . $id,
-                'STATUS'           => translate_dmn_status($row['status']), // TODO Improve the translation for ssl CP 2017-07
-                'STATUS_ICON'      => $statusIcon,
-                'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
-                'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO
-            ));
-            $tpl->parse('DOMAIN_ITEM', 'domain_item'); // TODO
+    while ($row = $stmt->fetchRow(PDO::FETCH_ASSOC)) {
+        if (!$row['status']) {
+            $row['status'] = 'disabled';
         }
-    // } else {
-    //     $tpl->assign('CUSTOMER_LIST', '');
-    //     set_page_message(tr('No domain with LetsEncrypt support has been found.'), 'static_info');
+        $statusIcon = letsencrypt_statusIcon($row['status']);
+        $type = 'domain';
+        $id = $row['domain_id'];
+
+        $tpl->assign(array(
+            'DOMAIN_NAME'      => decode_idna($row['domain_name']),
+            'ID'               => $row['domain_id'],
+            'NOTE'             => $row['state'] ? $row['state'] : '',
+            'EDIT'             => tr('Edit'),
+            'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $type . '&id=' . $id,
+            'STATUS'           => translate_dmn_status($row['status']), // TODO Improve the translation for ssl CP 2017-07
+            'STATUS_ICON'      => $statusIcon,
+            'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
+            'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO
+        ));
+        $tpl->parse('DOMAIN_ITEM', '.domain_item'); // TODO
     }
 }
 
@@ -114,32 +109,36 @@ function letsencrypt_generateDomains($tpl)
          array($_SESSION['user_id'])
      );
  
-     if ($stmt->rowCount()) {
-         while ($row = $stmt->fetchRow(PDO::FETCH_ASSOC)) {
-             if (!$row['status']) {
-                 $row['status'] = 'disabled';
-             }
-             $statusIcon = letsencrypt_statusIcon($row['status']);
-             $type = 'alias';
-             $id = $row['alias_id'];
- 
-             $tpl->assign(array(
-                 'DOMAIN_NAME'      => decode_idna($row['alias_name']),
-                 'ID'               => $row['alias_id'],
-                 'NOTE'             => $row['state'] ? $row['state'] : '',
-                 'EDIT'             => tr('Edit'),
-                 'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $type . '&id=' . $id,
-                 'STATUS'           => translate_dmn_status($row['status']), // TODO Improve the translation for ssl CP 2017-07
-                 'STATUS_ICON'      => $statusIcon,
-                 'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
-                 'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO
-             ));
-             $tpl->parse('ALS_ITEM', 'als_item'); // TODO
-         }
-     // } else {
-     //     $tpl->assign('CUSTOMER_LIST', '');
-     //     set_page_message(tr('No domain with LetsEncrypt support has been found.'), 'static_info');
-     }
+    if (!$stmt->rowCount()) {
+        $tpl->assign(array(
+            'ALS_MSG' => tr('You do not have domain aliases.'),
+            'ALS_LIST' => ''
+        ));
+        return;
+    }
+
+    while ($row = $stmt->fetchRow(PDO::FETCH_ASSOC)) {
+        if (!$row['status']) {
+            $row['status'] = 'disabled';
+        }
+        $statusIcon = letsencrypt_statusIcon($row['status']);
+        $type = 'alias';
+        $id = $row['alias_id'];
+
+        $tpl->assign(array(
+            'DOMAIN_NAME'      => decode_idna($row['alias_name']),
+            'ID'               => $row['alias_id'],
+            'NOTE'             => $row['state'] ? $row['state'] : '',
+            'EDIT'             => tr('Edit'),
+            'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $type . '&id=' . $id,
+            'STATUS'           => translate_dmn_status($row['status']), // TODO Improve the translation for ssl CP 2017-07
+            'STATUS_ICON'      => $statusIcon,
+            'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
+            'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO
+        ));
+        $tpl->parse('ALS_ITEM', '.als_item'); // TODO
+    }
+    $tpl->assign('ALS_MESSAGE', '');
  }
  
 /**
@@ -163,32 +162,36 @@ function letsencrypt_generateDomains($tpl)
          array($_SESSION['user_id'])
      );
  
-     if ($stmt->rowCount()) {
-         while ($row = $stmt->fetchRow(PDO::FETCH_ASSOC)) {
-             if (!$row['status']) {
-                 $row['status'] = 'disabled';
-             }
-             $statusIcon = letsencrypt_statusIcon($row['status']);
-             $type = 'subdomain';
-             $id = $row['subdomain_id'];
- 
-             $tpl->assign(array(
-                 'DOMAIN_NAME'      => decode_idna($row['subdomain_name'] . '.' . $row['domain_name']),
-                 'ID'               => $row['subdomain_id'],
-                 'NOTE'             => $row['state'] ? $row['state'] : '',
-                 'EDIT'             => tr('Edit'),
-                 'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $type . '&id=' . $id,
-                 'STATUS'           => translate_dmn_status($row['status']), // TODO Improve the translation for ssl CP 2017-07
-                 'STATUS_ICON'      => $statusIcon,
-                 'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
-                 'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO
-             ));
-             $tpl->parse('SUB_ITEM', 'sub_item'); // TODO
-         }
-     // } else {
-     //     $tpl->assign('CUSTOMER_LIST', '');
-     //     set_page_message(tr('No domain with LetsEncrypt support has been found.'), 'static_info');
-     }
+    if (!$stmt->rowCount()) {
+        $tpl->assign(array(
+            'SUB_MSG' => tr('You do not have subdomains.'),
+            'SUB_LIST' => ''
+        ));
+        return;
+    }
+
+    while ($row = $stmt->fetchRow(PDO::FETCH_ASSOC)) {
+        if (!$row['status']) {
+            $row['status'] = 'disabled';
+        }
+        $statusIcon = letsencrypt_statusIcon($row['status']);
+        $type = 'subdomain';
+        $id = $row['subdomain_id'];
+
+        $tpl->assign(array(
+            'DOMAIN_NAME'      => decode_idna($row['subdomain_name'] . '.' . $row['domain_name']),
+            'ID'               => $row['subdomain_id'],
+            'NOTE'             => $row['state'] ? $row['state'] : '',
+            'EDIT'             => tr('Edit'),
+            'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $type . '&id=' . $id,
+            'STATUS'           => translate_dmn_status($row['status']), // TODO Improve the translation for ssl CP 2017-07
+            'STATUS_ICON'      => $statusIcon,
+            'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
+            'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO
+        ));
+        $tpl->parse('SUB_ITEM', '.sub_item'); // TODO
+    }
+    $tpl->assign('SUB_MESSAGE', '');
  }
  
 
@@ -239,11 +242,7 @@ $tpl->assign(array(
 generateNavigation($tpl);
 letsencrypt_generateDomains($tpl);
 letsencrypt_generateAliases($tpl);
-$tpl->assign('ALS_MESSAGE', '');
-// $tpl->assign('ALS_ITEM', '');
 letsencrypt_generateSubdomains($tpl);
-$tpl->assign('SUB_MESSAGE', '');
-// $tpl->assign('SUB_ITEM', '');
 generatePageMessage($tpl);
 
 $tpl->parse('LAYOUT_CONTENT', 'page');
