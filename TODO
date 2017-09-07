@@ -1,15 +1,20 @@
 
-2017-08 V1.1
-- Have a look at the template for domain overview, copy to letsencrypt
-- Populate the view for alias and subdomains
-  - Need to do the getData / query for each type
-- Start to look at the backend
+
+2017-09 v1.1.1
+- Fake cert issues
+
 - Email address in reseller settings
 - Update the tests to test for add certificate
   - Update the database then run
 
 
-2017-08 V1.0
+2017-08 v1.1
+- DONE Have a look at the template for domain overview, copy to letsencrypt
+- DONE Populate the view for alias and subdomains
+  - DONE Need to do the getData / query for each type
+- DONE Start to look at the backend
+
+2017-08 v1.0
 - DONE Make the certbot-auto-test app to mock certbot-auto for dev
   - DONE Make it honor -d
   - DONE Strip www. to allow for more than one -d option typically with www.domain

@@ -1,5 +1,9 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 1.1.1
+
+* Fix #7 Invalid Certificate error
+
 ## Version 1.1.0
 
 * Implement #1 Support for aliases and subdomains

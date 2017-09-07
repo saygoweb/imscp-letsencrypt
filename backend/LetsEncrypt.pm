@@ -31,6 +31,7 @@ use iMSCP::Dir;
 use iMSCP::EventManager;
 use iMSCP::Execute;
 use iMSCP::File;
+use iMSCP::OpenSSL;
 use iMSCP::Rights;
 use iMSCP::Service;
 use iMSCP::TemplateParser;
@@ -116,23 +117,12 @@ sub update
     $rs ||= $self->_letsencryptConfig( 'configure' );
 
     # Trigger a rebuild on all domains with LetsEncrypt enabled
-    if (version->parse( $fromVersion ) < version->parse( '1.0.1' )) {
-        my $rows = $self->{'db'}->doQuery(
-            'letsencrypt_id',
-            "
-                SELECT letsencrypt_id, domain_id, alias_id, subdomain_id, cert_name, http_forward, status
-                FROM letsencrypt WHERE status IN('ok')
-            "
+    if (version->parse( $fromVersion ) < version->parse( '1.1.1' )) {
+        $self->{'db'}->doQuery(
+            'q',
+            "UPDATE letsencrypt SET status='tochange' WHERE status IN('ok')"
         );
-        unless (ref $rows eq 'HASH') {
-            error( $rows );
-            return 1;
-        }
-
-        my @sql;
-        for(values %{$rows}) {
-            $rs ||= $self->_triggerDomainOnChange($_->{'domain_id'});
-        }
+        $self->run();
     }
 
     return $rs if $rs;
@@ -288,7 +278,9 @@ sub _init
 {
     my $self = shift;
 
-    $self->{'testmode'} = 0;
+    # testmode enables the mocked certbot-auto that creates self-signed certificates
+    # enabled = 1, disabled = 0
+    $self->{'testmode'} = 1;
 
     $self->{'db'} = iMSCP::Database->factory();
     $self->{'httpd'} = Servers::httpd->factory();
@@ -345,46 +337,19 @@ sub _domainTypeAndId
 sub _addCertificate
 {
     my ($self, $type, $id, $certName) = @_;
-    # This action must be idempotent ( this allow to handle 'tochange' status which include key renewal )
+    # This action must be idempotent ( this allows us to handle 'tochange' status which include key renewal )
 
     debug("_addCertificate ");
 
-    # Fake out the SSL_SUPPORT in the Domains module by updating the ssl_certs table and creating a fake cert file
-    my $rs = 0;
-    my $ssl_cert = $self->{'db'}->doQuery(
-        'domain_id', 'SELECT * FROM ssl_certs WHERE domain_type = ? AND domain_id = ?',
-        $type, $id
-    );
-    if (exists $ssl_cert->{$id}) {
-        $rs = $self->{'db'}->doQuery(
-            'u',
-            "UPDATE ssl_certs SET status = 'ok' WHERE domain_type = ? AND domain_id = ? ",
-            $type, $id
-        );
-    } else {
-        $rs = $self->{'db'}->doQuery(
-            'i',
-            "INSERT INTO ssl_certs (status, domain_type, domain_id) VALUES ('ok', ?, ?)",
-            $type, $id
-        );
-    }
-    unless (ref $rs eq 'HASH') {
-        error( $rs );
-        return 1;
-    }
-
-    # TODO This will not work for test domains (I think) CP 2017-09-05
-    # TODO This function can go to the type of the function CP 2017-09-05
     if (!$self->{'testmode'} && !gethostbyname($certName)) {
         error("Cannot resolve $certName");
         return 1;
     }
 
-    # Create the fake cert file, its not valid PEM but that doesn't matter.
-    # TODO Does this have to be before the certbot call? If not, we could put it below and use links. CP 2017-09-05
-    my $certificate = iMSCP::File->new( filename => "$main::imscpConfig{'GUI_ROOT_DIR'}/data/certs/$certName.pem");
-    $certificate->set('LetsEncrypt Dummy Certificate');
-    $certificate->save();
+    # Fake out the SSL_SUPPORT in the Domains module by updating the ssl_certs table and creating a fake cert file
+    my $rs = 0;
+    $rs = $self->_updateSelfSignedCertificate($type, $id);
+    $rs == 0 or return $rs;
 
     my $certNameWWW = 'www.' . $certName;
     my $haveWWW = gethostbyname($certNameWWW) ? 1 : 0;
@@ -410,8 +375,71 @@ sub _addCertificate
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
     $self->_triggerDomainOnChange($type, $id);
  
-    # my $rs = $self->_deleteCertificate( $domainId, $aliasId, $domain );
-    # return $rs if $rs;
+    0;
+}
+
+sub _updateSelfSignedCertificate
+{
+    my ($self, $type, $id) = @_;
+    my $rs = 0;
+    my $result = $self->{'db'}->doQuery(
+        'cert_id',
+        'SELECT * FROM ssl_certs WHERE domain_type = ? AND domain_id = ?',
+        $type, $id
+    );
+    my $keyTempFile = File::Temp->new(UNLINK => 1);
+    my $keyFile = iMSCP::File->new(filename => $keyTempFile->filename);
+    my $certTempFile = File::Temp->new(UNLINK => 1);
+    my $certFile = iMSCP::File->new(filename => $certTempFile->filename);
+    if (%{$result}) {
+        my $certId = each %{$result};
+        my $record = $result->{$certId};
+        # If we have a key or certificate check to see if they are valid
+        if ($record->{'private_key'} || $record->{'certificate'}) {
+            $keyFile->set($record->{'private_key'});
+            $keyFile->save();
+            $certFile->set($record->{'certificate'});
+            $certFile->save();
+            my $openSSL = iMSCP::OpenSSL->new(
+                private_key_container_path     => $keyTempFile->filename,
+                certificate_container_path     => $certTempFile->filename
+            );
+            return 0 if $openSSL->validateCertificateChain() == 0;
+        }
+    }
+
+    # Create a new key and self signed certificate
+    my $cmd = [
+        'openssl', 'req', '-x509', '-nodes', '-days', '36500', '-subj', '/CN=test1.local', '-newkey', 'rsa',
+        '-keyout', $keyTempFile,
+        '-out', $certTempFile
+    ];
+    $rs = execute($cmd, \ my $stdout, \ my $stderr);
+    print($stdout . "\n") if $stdout;
+    print($stderr . "\n") if $stderr;
+
+    my $key = $keyFile->get();
+    my $cert = $certFile->get();
+
+    if (%{$result}) {
+        # Update
+        $rs = $self->{'db'}->doQuery(
+            'u',
+            "UPDATE ssl_certs SET status='tochange', private_key=?, certificate=? WHERE domain_type=? AND domain_id=? ",
+            $key, $cert, $type, $id
+        );
+    } else {
+        # Insert
+        $rs = $self->{'db'}->doQuery(
+            'i',
+            "INSERT INTO ssl_certs (status, private_key, certificate, domain_type, domain_id) VALUES ('toadd', ?, ?, ?, ?)",
+            $key, $cert, $type, $id
+        );
+    }
+    unless (ref $rs eq 'HASH') {
+        error($rs);
+        return 1;
+    }
 
     0;
 }
@@ -588,7 +616,7 @@ if [ -f /usr/sbin/csf ]; then
 fi
 EOF
 
-    my $cron = iMSCP::File->new("/etc/cron.weekly/letsencrypt");
+    my $cron = iMSCP::File->new( filename => '/etc/cron.weekly/letsencrypt');
     $cron->set($cronContent);
     $cron->save();
     $cron->mode(0755);
