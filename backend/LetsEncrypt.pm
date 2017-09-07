@@ -280,7 +280,7 @@ sub _init
 
     # testmode enables the mocked certbot-auto that creates self-signed certificates
     # enabled = 1, disabled = 0
-    $self->{'testmode'} = 1;
+    $self->{'testmode'} = 0;
 
     $self->{'db'} = iMSCP::Database->factory();
     $self->{'httpd'} = Servers::httpd->factory();
