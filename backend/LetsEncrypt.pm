@@ -117,7 +117,7 @@ sub update
     $rs ||= $self->_letsencryptConfig( 'configure' );
 
     # Trigger a rebuild on all domains with LetsEncrypt enabled
-    if (version->parse( $fromVersion ) < version->parse( '1.1.1' )) {
+    if (version->parse( $fromVersion ) < version->parse( '1.4.0' )) {
         $self->{'db'}->doQuery(
             'q',
             "UPDATE letsencrypt SET status='tochange' WHERE status IN('ok')"
@@ -352,7 +352,7 @@ sub _addCertificate
     $rs == 0 or return $rs;
 
     my $certNameWWW = 'www.' . $certName;
-    my $haveWWW = gethostbyname($certNameWWW) ? 1 : 0;
+    my $haveWWW = !$self->{'testmode'} && gethostbyname($certNameWWW) ? 1 : 0;
 
     # Call certbot-auto to create the key and certificate under /etc/letsencrypt
     my $certbot = 'certbot-auto';
@@ -362,7 +362,7 @@ sub _addCertificate
     my ($stdout, $stderr);
     my $command = $certbot . " certonly --apache --no-bootstrap --non-interactive -v -d " . escapeShell($certName);
     if ($haveWWW) {
-        $command = $command . " -d " . escapeShell($certNameWWW);
+        $command = $command . " --expand -d " . escapeShell($certNameWWW);
     }
     $rs = execute(
         $command,
@@ -490,7 +490,7 @@ sub _triggerDomainOnChange
 sub _onAfterHttpdBuildConf
 {
     my ($self, $cfgTpl, $filename, $data) = @_;
-    return unless $filename eq 'domain_ssl.tpl';
+    return unless $filename eq 'domain.tpl';
 
     my $domain = $data->{'DOMAIN_NAME'};
     my $domain_store_path = '/etc/letsencrypt/live/' . $domain . '/';
@@ -511,7 +511,7 @@ EOF
     $snippet =~ s/_CERTIFICATEKEYFILE_/$key_file/g;
     $snippet =~ s/_CERTIFICATECHAINFILE_/$chain_file/g;
 
-    $$cfgTpl =~ s/^\s+SSLEngine.*^\n/$snippet/sm;
+    $$cfgTpl =~ s/^\s+SSLEngine.*\n\s+SSLCertificateFile.*\n/$snippet/gm;
 
     0;
 }

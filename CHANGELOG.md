@@ -1,5 +1,9 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 1.4.0
+
+* Fix #13 Support iMSCP 1.4.x
+
 ## Version 1.1.1
 
 * Fix #7 Invalid Certificate error
