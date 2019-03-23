@@ -137,7 +137,7 @@ class iMSCP_Plugin_LetsEncrypt extends iMSCP_Plugin_Action
     public function onAfterDeleteCustomer(iMSCP_Events_Event $event)
     {
         // exec_query(
-        //     'UPDATE letsencrypt SET letsencrypt_status = ? WHERE customer_id = ?',
+        //     'UPDATE letsencrypt SET status = ? WHERE customer_id = ?',
         //     array('todelete', $event->getParam('customerId'))
         // );
     }
@@ -150,7 +150,7 @@ class iMSCP_Plugin_LetsEncrypt extends iMSCP_Plugin_Action
      */
     public function onAfterDeleteDomainAlias(iMSCP_Events_Event $event)
     {
-        exec_query('UPDATE letsencrypt SET letsencrypt_status = ? WHERE alias_id = ?', array(
+        exec_query('UPDATE letsencrypt SET status = ? WHERE alias_id = ?', array(
             'todelete', $event->getParam('domainAliasId')
         ));
     }
@@ -180,9 +180,9 @@ class iMSCP_Plugin_LetsEncrypt extends iMSCP_Plugin_Action
     {
         $stmt = exec_query(
             "
-                SELECT letsencrypt_id AS item_id, letsencrypt_status AS status, domain_name AS item_name,
-                    'letsencrypt' AS `table`, 'letsencrypt_status' AS field
-                FROM letsencrypt WHERE letsencrypt_status NOT IN(?, ?, ?, ?, ?, ?, ?)
+                SELECT letsencrypt_id AS item_id, cert_name AS item_name,
+                    'letsencrypt' AS `table`, 'status' AS field
+                FROM letsencrypt WHERE status NOT IN(?, ?, ?, ?, ?, ?, ?)
             ",
             array('ok', 'disabled', 'toadd', 'tochange', 'toenable', 'todisable', 'todelete')
         );
@@ -204,8 +204,8 @@ class iMSCP_Plugin_LetsEncrypt extends iMSCP_Plugin_Action
      */
     public function changeItemStatus($table, $field, $itemId)
     {
-        if ($table == 'letsencrypt' && $field == 'letsencrypt_status') {
-            exec_query('UPDATE letsencrypt SET letsencrypt_status = ? WHERE letsencrypt_id = ?', array('tochange', $itemId));
+        if ($table == 'letsencrypt' && $field == 'status') {
+            exec_query('UPDATE letsencrypt SET `status` = ? WHERE letsencrypt_id = ?', array('tochange', $itemId));
         }
     }
 
@@ -217,7 +217,7 @@ class iMSCP_Plugin_LetsEncrypt extends iMSCP_Plugin_Action
     public function getCountRequests()
     {
         $stmt = exec_query(
-            'SELECT COUNT(letsencrypt_id) AS cnt FROM letsencrypt WHERE letsencrypt_status IN (?, ?, ?, ?, ?)',
+            'SELECT COUNT(letsencrypt_id) AS cnt FROM letsencrypt WHERE `status` IN (?, ?, ?, ?, ?)',
             array('toadd', 'tochange', 'toenable', 'todisable', 'todelete')
         );
 
