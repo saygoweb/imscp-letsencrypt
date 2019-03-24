@@ -21,7 +21,7 @@
 /**
  * Class iMSCP_Plugin_LetsEncrypt
  */
-class iMSCP_Plugin_LetsEncrypt extends iMSCP_Plugin_Action
+class iMSCP_Plugin_SGW_LetsEncrypt extends iMSCP_Plugin_Action
 {
     /**
      * Plugin initialization

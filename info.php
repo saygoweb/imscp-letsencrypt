@@ -21,10 +21,10 @@
 return array(
     'author' => 'Cambell Prince',
     'email' => 'cambell.prince@gmail.com',
-    'version' => '1.4.0',
+    'version' => '1.4.10',
     'require_api' => '1.0.5',
-    'date' => '2018-07-18',
-    'name' => 'LetsEncrypt',
+    'date' => '2019-03-25',
+    'name' => 'SGW_LetsEncrypt',
     'desc' => 'Plugin that provides LetsEncrypt SSL certificates.',
     'url' => 'https://github.com/saygoweb/imscp-plugin-letsencrypt'
 );

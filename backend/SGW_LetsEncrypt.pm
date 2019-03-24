@@ -1,6 +1,6 @@
 =head1 NAME
 
- Plugin::LetsEncrypt
+ Plugin::SGW_LetsEncrypt
 
 =cut
 
@@ -21,7 +21,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
-package Plugin::LetsEncrypt;
+package Plugin::SGW_LetsEncrypt;
 
 use strict;
 use warnings;
@@ -280,7 +280,7 @@ sub _init
 
     # testmode enables the mocked certbot-auto that creates self-signed certificates
     # enabled = 1, disabled = 0
-    $self->{'testmode'} = 0;
+    $self->{'testmode'} = 1;
 
     $self->{'db'} = iMSCP::Database->factory();
     $self->{'httpd'} = Servers::httpd->factory();
