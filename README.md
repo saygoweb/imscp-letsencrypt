@@ -10,15 +10,18 @@ Testing and bug reports are welcome.
 
 ## Requirements
 
-* i-MSCP 1.5.x (plugin version v1.4.x)
-* i-MSCP 1.4.x (plugin version v1.4.x)
+* i-MSCP 1.5.x (plugin version v1.5.x)
+* i-MSCP 1.4.x (plugin version v1.5.x)
 * i-MSCP 1.3.x (up to version v1.1.1)
 
-Plugin version 1.4.0 has been tested with i-MSCP version 1.4.7 on Debian Stretch 9.4
+Plugin version 1.4.x has been tested with i-MSCP version 1.4.7 on Debian Stretch 9.4
 
-Plugin version 1.4.0 has been tested with i-MSCP version 1.5.x on Debian Stretch 9.4
+Plugin version 1.5.x has been tested with i-MSCP version 1.5.x on Debian Stretch 9.4
 
 ## Installation
+
+Download the SGW_LetsEncrypt.tgz release file from the releases page.  Don't download the Git source archive if
+you plan to upload using hte plugin management interface. 
 
 1. Upload the plugin through the plugin management interface
 2. Install the plugin through the plugin management interface
@@ -31,7 +34,7 @@ Plugin version 1.4.0 has been tested with i-MSCP version 1.5.x on Debian Stretch
 ## License
 
 ```
-i-MSCP  LetsEncrypt plugin
+i-MSCP  SGW_LetsEncrypt plugin
 Copyright (C) 2017 Cambell Prince <cambell.prince@gmail.com>
 
 This program is free software; you can redistribute it and/or modify
