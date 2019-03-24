@@ -21,7 +21,7 @@
 return array(
     'author' => 'Cambell Prince',
     'email' => 'cambell.prince@gmail.com',
-    'version' => '1.4.10',
+    'version' => '1.5.0',
     'require_api' => '1.0.5',
     'date' => '2019-03-25',
     'name' => 'SGW_LetsEncrypt',

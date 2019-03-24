@@ -1,0 +1,17 @@
+.git
+.gitignore
+.vscocde
+node_modules
+composer.*
+package.json
+test
+phpunit.xml
+Vagrantfile
+build*
+.travis.yml
+*.zip
+*.tgz
+gulpfile.js
+fred.php
+upload-exclude.txt
+upload-exclude-zip.txt
