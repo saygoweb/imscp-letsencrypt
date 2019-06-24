@@ -1,6 +1,6 @@
 <?php
 /**
- * i-MSCP LetsEncrypt plugin
+ * i-MSCP SGW_LetsEncrypt plugin
  * Copyright (C) 2017 Cambell Prince <cambell.prince@gmail.com>
  *
  * This program is free software; you can redistribute it and/or
@@ -21,9 +21,9 @@
 return array(
     'author' => 'Cambell Prince',
     'email' => 'cambell.prince@gmail.com',
-    'version' => '1.5.0',
+    'version' => '1.5.1',
     'require_api' => '1.0.5',
-    'date' => '2019-03-25',
+    'date' => '2019-06-24',
     'name' => 'SGW_LetsEncrypt',
     'desc' => 'Plugin that provides LetsEncrypt SSL certificates.',
     'url' => 'https://github.com/saygoweb/imscp-plugin-letsencrypt'

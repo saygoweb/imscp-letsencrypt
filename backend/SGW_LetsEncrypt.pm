@@ -280,7 +280,7 @@ sub _init
 
     # testmode enables the mocked certbot-auto that creates self-signed certificates
     # enabled = 1, disabled = 0
-    $self->{'testmode'} = 1;
+    $self->{'testmode'} = 0;
 
     $self->{'db'} = iMSCP::Database->factory();
     $self->{'httpd'} = Servers::httpd->factory();
@@ -357,7 +357,7 @@ sub _addCertificate
     # Call certbot-auto to create the key and certificate under /etc/letsencrypt
     my $certbot = 'certbot-auto';
     if ($self->{'testmode'}) {
-        $certbot = $main::imscpConfig{'PLUGINS_DIR'}.'/LetsEncrypt/backend/certbot-auto-test.pm';
+        $certbot = $main::imscpConfig{'PLUGINS_DIR'}.'/SGW_LetsEncrypt/backend/certbot-auto-test.pm';
     }
     my ($stdout, $stderr);
     my $command = $certbot . " certonly --apache --no-bootstrap --non-interactive -v -d " . escapeShell($certName);

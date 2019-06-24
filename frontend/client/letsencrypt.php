@@ -1,6 +1,6 @@
 <?php
 /**
- * i-MSCP LetsEncrypt plugin
+ * i-MSCP SGW_LetsEncrypt plugin
  * Copyright (C) 2017 Cambell Prince <cambell.prince@gmail.com>
  *
  * This program is free software; you can redistribute it and/or
@@ -18,11 +18,11 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
-namespace LetsEncrypt;
+namespace SGW_LetsEncrypt;
 
 use iMSCP_Events as Events;
 use iMSCP_Events_Aggregator as EventManager;
-use iMSCP_Plugin_LetsEncrypt as LetsEncrypt;
+use iMSCP_Plugin_SGW_LetsEncrypt as SGW_LetsEncrypt;
 use iMSCP_pTemplate as TemplateEngine;
 use PDO;
 
@@ -203,14 +203,14 @@ function letsencrypt_generateDomains($tpl)
 EventManager::getInstance()->dispatch(Events::onClientScriptStart);
 check_login('user');
 
-if (!LetsEncrypt::customerHasLetsEncrypt(intval($_SESSION['user_id']))) {
+if (!SGW_LetsEncrypt::customerHasLetsEncrypt(intval($_SESSION['user_id']))) {
     showBadRequestErrorPage();
 }
 
 $tpl = new TemplateEngine();
 $tpl->define_dynamic(array(
     'layout'                     => 'shared/layouts/ui.tpl',
-    'page'                       => '../../plugins/LetsEncrypt/themes/default/view/client/letsencrypt.tpl',
+    'page'                       => '../../plugins/SGW_LetsEncrypt/themes/default/view/client/letsencrypt.tpl',
     'page_message'               => 'layout',
     'domain_list'                => 'page',
     'domain_item'                => 'domain_list',
