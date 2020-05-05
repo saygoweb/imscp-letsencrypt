@@ -21,7 +21,7 @@ Plugin version 1.5.x has been tested with i-MSCP version 1.5.x on Debian Stretch
 ## Installation
 
 Download the SGW_LetsEncrypt.tgz release file from the releases page.  Don't download the Git source archive if
-you plan to upload using hte plugin management interface. 
+you plan to upload using the plugin management interface. 
 
 1. Upload the plugin through the plugin management interface
 2. Install the plugin through the plugin management interface

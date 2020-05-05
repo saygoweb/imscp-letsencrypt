@@ -1,5 +1,19 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 1.5.2
+
+* Fix #15 gethostbyname detection can be fooled:
+  a. by using the local resolver and b. by the use of wildcard subdomains
+
+## Version 1.5.1
+
+* Continuing with the renaming of LetsEncrypt to SGW_LetsEncrypt.
+* Fix #19 Fatal error: Class 'iMSCP_Plugin_LetsEncrypt' not found
+
+## Version 1.5.0
+
+* Introduced new packaging such that the installation via the iMSCP plugin interface now works.
+
 ## Version 1.4.0
 
 * Fix #13 Support iMSCP 1.4.x
