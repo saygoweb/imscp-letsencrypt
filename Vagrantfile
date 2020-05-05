@@ -18,7 +18,7 @@ apt-get -y install git
 
 cd /home/vagrant
 if [ ! -d "imscp" ]; then
-  git clone https://github.com/i-MSCP/imscp.git imscp
+  git clone https://github.com/saygoweb/imscp.git imscp
 else
   cd imscp; git pull --ff-only
 fi
@@ -65,7 +65,7 @@ Vagrant.configure(2) do |config|
   # the path on the host to the actual folder. The second argument is
   # the path on the guest to mount the folder. And the optional third
   # argument is a set of non-required options.
-  config.vm.synced_folder "~/src/sgw/imscp-letsencrypt", "/var/www/imscp/gui/plugins/LetsEncrypt"
+  config.vm.synced_folder "~/Documents/src/sgw/imscp-letsencrypt", "/var/www/imscp/gui/plugins/SGW_LetsEncrypt"
 
   # Provider-specific configuration so you can fine-tune various
   # backing providers for Vagrant. These expose provider-specific options.

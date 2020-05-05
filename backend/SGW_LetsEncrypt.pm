@@ -321,6 +321,26 @@ sub _domainTypeAndId
     return ('', 0);
 }
 
+sub _lookup
+{
+    my ($domain) = @_;
+    my $rs = 0;
+
+    my ($stdout, $stderr);
+    my $command = "host " . $domain . " 8.8.8.8";
+    $rs = execute(
+        $command,
+        \$stdout, \$stderr
+    );
+    # print( $command );
+    # print( $stdout ) if $stdout;
+    return 1 if $stdout =~ /Host \w+ not found/m;
+    return 0 if $stdout =~ /is an alias for/m;
+    return 0 if $stdout =~ /has address/m;
+
+    return 2;
+}
+
 =item _addCertificate($domainId, $certName, $aliasId, $subdomainId)
 
  Adds LetsEncrypt SSL certificate to the given domain or alias
@@ -341,7 +361,7 @@ sub _addCertificate
 
     debug("_addCertificate ");
 
-    if (!$self->{'testmode'} && !gethostbyname($certName)) {
+    if (!$self->{'testmode'} && _lookup($certName) != 0) {
         error("Cannot resolve $certName");
         return 1;
     }
@@ -352,7 +372,7 @@ sub _addCertificate
     $rs == 0 or return $rs;
 
     my $certNameWWW = 'www.' . $certName;
-    my $haveWWW = !$self->{'testmode'} && gethostbyname($certNameWWW) ? 1 : 0;
+    my $haveWWW = !$self->{'testmode'} && (_lookup($certNameWWW) == 0) ? 1 : 0;
 
     # Call certbot-auto to create the key and certificate under /etc/letsencrypt
     my $certbot = 'certbot-auto';
