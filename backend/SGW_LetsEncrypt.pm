@@ -374,8 +374,8 @@ sub _addCertificate
     my $certNameWWW = 'www.' . $certName;
     my $haveWWW = !$self->{'testmode'} && (_lookup($certNameWWW) == 0) ? 1 : 0;
 
-    # Call certbot-auto to create the key and certificate under /etc/letsencrypt
-    my $certbot = 'certbot-auto';
+    # Call certbot to create the key and certificate under /etc/letsencrypt
+    my $certbot = 'certbot';
     if ($self->{'testmode'}) {
         $certbot = $main::imscpConfig{'PLUGINS_DIR'}.'/SGW_LetsEncrypt/backend/certbot-auto-test.pm';
     }
