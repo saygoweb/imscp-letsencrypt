@@ -374,8 +374,8 @@ sub _addCertificate
     my $certNameWWW = 'www.' . $certName;
     my $haveWWW = !$self->{'testmode'} && (_lookup($certNameWWW) == 0) ? 1 : 0;
 
-    # Call certbot-auto to create the key and certificate under /etc/letsencrypt
-    my $certbot = 'certbot-auto';
+    # Call certbot to create the key and certificate under /etc/letsencrypt
+    my $certbot = 'certbot';
     if ($self->{'testmode'}) {
         $certbot = $main::imscpConfig{'PLUGINS_DIR'}.'/SGW_LetsEncrypt/backend/certbot-auto-test.pm';
     }
@@ -619,18 +619,26 @@ sub _deleteCertificate
 
 sub _letsencryptInstall
 {
-    my $file = iMSCP::File->new( filename => '/usr/local/bin/certbot-auto' );
-    if (not -e $file->{filename}) {
+    # Remove certbot-auto if it exists
+    my $oldFile = iMSCP::File->new( filename => '/usr/local/bin/certbot-auto' );
+    if (-e $oldFile->{filename}) {
+        $oldFile->delFile()
         execute('wget --no-check-certificate https://dl.eff.org/certbot-auto -P /usr/local/bin/');
     }
-    $file->mode(0755);
+    # Install snap and then certbot via snap
+    my $newFile = iMSCP::File->new( filename => '/usr/local/bin/certbot' );
+    if (not -e $newFile->{filename}) {
+        execute('apt-get -y install snap');
+        execute('snap install core; snap refresh core');
+        execute('snap install --classic certbot');
+    }
 
     my $cronContent = <<EOF;
 #!/bin/sh
 if [ -f /usr/sbin/csf ]; then
     /usr/sbin/csf -ta 0.0.0.0/0 180 -d out
 fi
-/usr/local/bin/certbot-auto renew --quiet --no-self-upgrade
+/usr/local/bin/certbot renew --quiet --no-self-upgrade
 if [ -f /usr/sbin/csf ]; then
     /usr/sbin/csf -tr 0.0.0.0/0
 fi
@@ -640,13 +648,6 @@ EOF
     $cron->set($cronContent);
     $cron->save();
     $cron->mode(0755);
-
-    my ($stdout, $stderr);
-    # Attempt to install quietly
-    execute(
-        "/usr/local/bin/certbot-auto --non-interactive -v",
-        \$stdout, \$stderr
-    );
 
     0;
 }

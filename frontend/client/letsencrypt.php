@@ -20,10 +20,10 @@
 
 namespace SGW_LetsEncrypt;
 
-use iMSCP_Events as Events;
-use iMSCP_Events_Aggregator as EventManager;
-use iMSCP_Plugin_SGW_LetsEncrypt as SGW_LetsEncrypt;
-use iMSCP_pTemplate as TemplateEngine;
+use iMSCP\Event\EventAggregator;
+use iMSCP\Event\Events;
+use iMSCP\Plugin\SGW_LetsEncrypt\SGW_LetsEncrypt;
+use iMSCP\TemplateEngine;
 use PDO;
 
 /***********************************************************************************************************************
@@ -199,8 +199,7 @@ function letsencrypt_generateDomains($tpl)
 /***********************************************************************************************************************
  * Main
  */
-
-EventManager::getInstance()->dispatch(Events::onClientScriptStart);
+EventAggregator::getInstance()->dispatch(Events::onClientScriptStart);
 check_login('user');
 
 if (!SGW_LetsEncrypt::customerHasLetsEncrypt(intval($_SESSION['user_id']))) {
@@ -246,6 +245,6 @@ letsencrypt_generateSubdomains($tpl);
 generatePageMessage($tpl);
 
 $tpl->parse('LAYOUT_CONTENT', 'page');
-EventManager::getInstance()->dispatch(Events::onClientScriptEnd, array('templateEngine' => $tpl));
+EventAggregator::getInstance()->dispatch(Events::onClientScriptEnd, array('templateEngine' => $tpl));
 $tpl->prnt();
 
