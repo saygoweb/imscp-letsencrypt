@@ -630,7 +630,7 @@ sub _letsencryptInstall
 if [ -f /usr/sbin/csf ]; then
     /usr/sbin/csf -ta 0.0.0.0/0 180 -d out
 fi
-/usr/local/bin/certbot-auto renew --quiet --no-self-upgrade
+/usr/local/bin/certbot renew --quiet --no-self-upgrade
 if [ -f /usr/sbin/csf ]; then
     /usr/sbin/csf -tr 0.0.0.0/0
 fi
@@ -641,12 +641,12 @@ EOF
     $cron->save();
     $cron->mode(0755);
 
-    my ($stdout, $stderr);
-    # Attempt to install quietly
-    execute(
-        "/usr/local/bin/certbot-auto --non-interactive -v",
-        \$stdout, \$stderr
-    );
+    # my ($stdout, $stderr);
+    # # Attempt to install quietly
+    # execute(
+    #     "/usr/local/bin/certbot-auto --non-interactive -v",
+    #     \$stdout, \$stderr
+    # );
 
     0;
 }
