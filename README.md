@@ -10,13 +10,22 @@ Testing and bug reports are welcome.
 
 ## Requirements
 
+* i-MSCP 1.5.3-maintenance (plugin version v2.x)
 * i-MSCP 1.5.x (plugin version v1.5.x)
 * i-MSCP 1.4.x (plugin version v1.5.x)
 * i-MSCP 1.3.x (up to version v1.1.1)
 
+Plugin version 2.0.x has been tested with i-MSCP version 1.5.3-maintenance on Debian Buster 10.10
+
 Plugin version 1.4.x has been tested with i-MSCP version 1.4.7 on Debian Stretch 9.4
 
 Plugin version 1.5.x has been tested with i-MSCP version 1.5.x on Debian Stretch 9.4
+
+Note that the plugin managemnet in i-MSCP 1.5.3-maintenance may be broken awaiting a merge of the following pull-requests to fix the issues:
+* [Fix PluginManager](https://github.com/i-MSCP/imscp/pull/108)
+* [Add _ to plugin name validation](https://github.com/i-MSCP/imscp/pull/109)
+
+The plugin has been tested with the 1.5.3-maintenance-sgw branch [available here](https://github.com/saygoweb/imscp).
 
 ## Installation
 
