@@ -619,11 +619,19 @@ sub _deleteCertificate
 
 sub _letsencryptInstall
 {
-    my $file = iMSCP::File->new( filename => '/usr/local/bin/certbot-auto' );
-    if (not -e $file->{filename}) {
+    # Remove certbot-auto if it exists
+    my $oldFile = iMSCP::File->new( filename => '/usr/local/bin/certbot-auto' );
+    if (-e $oldFile->{filename}) {
+        $oldFile->delFile()
         execute('wget --no-check-certificate https://dl.eff.org/certbot-auto -P /usr/local/bin/');
     }
-    $file->mode(0755);
+    # Install snap and then certbot via snap
+    my $newFile = iMSCP::File->new( filename => '/usr/local/bin/certbot' );
+    if (not -e $newFile->{filename}) {
+        execute('apt-get -y install snap');
+        execute('snap install core; snap refresh core');
+        execute('snap install --classic certbot');
+    }
 
     my $cronContent = <<EOF;
 #!/bin/sh
@@ -640,13 +648,6 @@ EOF
     $cron->set($cronContent);
     $cron->save();
     $cron->mode(0755);
-
-    # my ($stdout, $stderr);
-    # # Attempt to install quietly
-    # execute(
-    #     "/usr/local/bin/certbot-auto --non-interactive -v",
-    #     \$stdout, \$stderr
-    # );
 
     0;
 }
