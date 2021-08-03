@@ -622,8 +622,7 @@ sub _letsencryptInstall
     # Remove certbot-auto if it exists
     my $oldFile = iMSCP::File->new( filename => '/usr/local/bin/certbot-auto' );
     if (-e $oldFile->{filename}) {
-        $oldFile->delFile()
-        execute('wget --no-check-certificate https://dl.eff.org/certbot-auto -P /usr/local/bin/');
+        $oldFile->delFile();
     }
     # Install snap and then certbot via snap
     my $newFile = iMSCP::File->new( filename => '/usr/local/bin/certbot' );
