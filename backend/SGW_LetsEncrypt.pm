@@ -461,7 +461,14 @@ sub _addCertificate
     debug( $stdout ) if $stdout;
     # certbot exits non-zero for conditions that are none of our business to recover from, such as a
     # domain that does not resolve yet. Report those against the domain rather than failing the run.
-    return $self->_error( _certbotError( $certName, $rs, $stdout, $stderr ) ) if $rs;
+    if ($rs) {
+        my $message = _certbotError( $certName, $rs, $stdout, $stderr );
+        # No certificate was issued, so take back the placeholder that was put in place for it.
+        # Left behind it would give the domain SSL support backed by /etc/letsencrypt files that
+        # do not exist, and the next rebuild of the domain would produce a vhost httpd cannot load.
+        $self->_revertSelfSignedCertificate( $type, $id );
+        return $self->_error( $message );
+    }
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
     return $self->_triggerDomainOnChange($type, $id);
@@ -497,6 +504,10 @@ sub _updateSelfSignedCertificate
 {
     my ($self, $type, $id) = @_;
     my $rs = 0;
+
+    # Nothing to undo until the ssl_certs table has actually been written to
+    undef $self->{'sslCertUndo'};
+
     my $result = $self->{'db'}->doQuery(
         'cert_id',
         'SELECT * FROM ssl_certs WHERE domain_type = ? AND domain_id = ?',
@@ -506,9 +517,10 @@ sub _updateSelfSignedCertificate
     my $keyFile = iMSCP::File->new(filename => $keyTempFile->filename);
     my $certTempFile = File::Temp->new(UNLINK => 1);
     my $certFile = iMSCP::File->new(filename => $certTempFile->filename);
+    my $record;
     if (%{$result}) {
         my $certId = each %{$result};
-        my $record = $result->{$certId};
+        $record = $result->{$certId};
         # If we have a key or certificate check to see if they are valid
         if ($record->{'private_key'} || $record->{'certificate'}) {
             $keyFile->set($record->{'private_key'});
@@ -536,8 +548,16 @@ sub _updateSelfSignedCertificate
     my $key = $keyFile->get();
     my $cert = $certFile->get();
 
+    # Remember what is being replaced so that it can be put back should the certificate request
+    # that follows fail, see _revertSelfSignedCertificate()
     if (%{$result}) {
         # Update
+        $self->{'sslCertUndo'} = {
+            action      => 'update',
+            status      => $record->{'status'},
+            private_key => $record->{'private_key'},
+            certificate => $record->{'certificate'}
+        };
         $rs = $self->{'db'}->doQuery(
             'u',
             "UPDATE ssl_certs SET status='tochange', private_key=?, certificate=? WHERE domain_type=? AND domain_id=? ",
@@ -545,6 +565,7 @@ sub _updateSelfSignedCertificate
         );
     } else {
         # Insert
+        $self->{'sslCertUndo'} = { action => 'delete' };
         $rs = $self->{'db'}->doQuery(
             'i',
             "INSERT INTO ssl_certs (status, private_key, certificate, domain_type, domain_id) VALUES ('toadd', ?, ?, ?, ?)",
@@ -552,7 +573,52 @@ sub _updateSelfSignedCertificate
         );
     }
     unless (ref $rs eq 'HASH') {
+        # The write did not happen, so there is nothing to undo
+        undef $self->{'sslCertUndo'};
         return $self->_error( $rs );
+    }
+
+    0;
+}
+
+=item _revertSelfSignedCertificate($type, $id)
+
+ Undo the ssl_certs change made by _updateSelfSignedCertificate()
+
+ Called when the certificate request fails, so that the domain is not left claiming SSL support
+ backed by a certificate that was never issued. Does nothing when the table was not written to.
+
+ Param string $type Domain type (dmn|als|sub)
+ Param int $id Domain unique identifier
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _revertSelfSignedCertificate
+{
+    my ($self, $type, $id) = @_;
+
+    my $undo = delete $self->{'sslCertUndo'};
+    return 0 unless $undo;
+
+    my $rs;
+    if ($undo->{'action'} eq 'update') {
+        $rs = $self->{'db'}->doQuery(
+            'u',
+            'UPDATE ssl_certs SET status = ?, private_key = ?, certificate = ? WHERE domain_type = ? AND domain_id = ?',
+            $undo->{'status'}, $undo->{'private_key'}, $undo->{'certificate'}, $type, $id
+        );
+    } else {
+        $rs = $self->{'db'}->doQuery(
+            'd',
+            'DELETE FROM ssl_certs WHERE domain_type = ? AND domain_id = ?',
+            $type, $id
+        );
+    }
+    unless (ref $rs eq 'HASH') {
+        # Logged on its own, the caller reports why the certificate request failed in the first place
+        error( $rs );
+        return 1;
     }
 
     0;
