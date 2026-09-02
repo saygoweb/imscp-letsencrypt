@@ -1,6 +1,7 @@
 .git
 .gitignore
 .vscocde
+log
 node_modules
 composer.*
 package.json
@@ -12,6 +13,6 @@ build*
 *.zip
 *.tgz
 gulpfile.js
-fred.php
+makefile.json
 upload-exclude.txt
 upload-exclude-zip.txt
