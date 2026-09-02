@@ -42,6 +42,9 @@ use parent 'Common::SingletonClass';
 
 use Data::Dumper;
 
+# Maximum length of an error message recorded in the letsencrypt.state column
+use constant ERROR_MAX_LENGTH => 1000;
+
 =head1 DESCRIPTION
 
  This package provides the backend part for the i-MSCP LetsEncrypt plugin.
@@ -226,28 +229,36 @@ sub run
         return 1;
     }
 
-    my @sql;
     for(values %{$rows}) {
         my ($type, $id) = $self->_domainTypeAndId($_->{'domain_id'}, $_->{'alias_id'}, $_->{'subdomain_id'});
+
+        # Any error raised while processing this domain is recorded against the domain itself, it
+        # must not abort the run nor put the plugin as a whole into an error state.
+        $self->_clearError();
+
+        my @sql;
         if ($_->{'status'} =~ /^to(?:add|change)$/) {
             my $rs = $self->_addCertificate( $type, $id, $_->{'cert_name'} );
             $rs |= $self->_updateForward( $type, $id, $_->{'cert_name'}, $_->{'http_forward'} );
             @sql = (
-                'UPDATE letsencrypt SET status = ? WHERE letsencrypt_id = ?',
-                ($rs ? scalar getMessageByType( 'error' ) || 'Unknown error' : 'ok'), $_->{'letsencrypt_id'}
+                'UPDATE letsencrypt SET status = ?, state = ? WHERE letsencrypt_id = ?',
+                ($rs ? 'error' : 'ok'), ($rs ? $self->_lastError() : ''), $_->{'letsencrypt_id'}
             );
         } elsif ($_->{'status'} eq 'todelete') {
             my $rs = $self->_deleteCertificate( $type, $id, $_->{'cert_name'} );
             $rs |= $self->_updateForward( $type, $id, $_->{'cert_name'}, 0 );
             if ($rs) {
                 @sql = (
-                    'UPDATE letsencrypt SET status = ? WHERE letsencrypt_id = ?',
-                    (scalar getMessageByType( 'error' ) || 'Unknown error'), $_->{'letsencrypt_id'}
+                    'UPDATE letsencrypt SET status = ?, state = ? WHERE letsencrypt_id = ?',
+                    'error', $self->_lastError(), $_->{'letsencrypt_id'}
                 );
             } else {
                 @sql = ('DELETE FROM letsencrypt WHERE letsencrypt_id = ?', $_->{'letsencrypt_id'});
             }
+        } else {
+            next;
         }
+
         # Update the status of the last operation
         # Comment out the below for dev testing CP 2017-06
         my $qrs = $self->{'db'}->doQuery( 'dummy', @sql );
@@ -294,6 +305,65 @@ sub _init
     iMSCP::EventManager->getInstance()->register( 'afterHttpdBuildConf', sub { $self->_onAfterHttpdBuildConf( @_ ); } );
 
     $self;
+}
+
+=item _clearError()
+
+ Forget the error recorded for the domain previously processed
+
+ Return int 0
+
+=cut
+
+sub _clearError
+{
+    my $self = shift;
+
+    undef $self->{'lastError'};
+
+    0;
+}
+
+=item _error($message)
+
+ Record an error against the domain being processed and log it
+
+ The message is normalised so that it reads well in the frontend, where it is reported
+ against the domain as its state.
+
+ Param string $message Error message
+ Return int 1
+
+=cut
+
+sub _error
+{
+    my ($self, $message) = @_;
+
+    $message = 'Unknown error' unless defined $message && $message =~ /\S/;
+    $message =~ s/\s+/ /g;
+    $message =~ s/^ | $//g;
+    $message = substr( $message, 0, ERROR_MAX_LENGTH - 3 ).'...' if length $message > ERROR_MAX_LENGTH;
+
+    $self->{'lastError'} = $message;
+    error( $message );
+
+    1;
+}
+
+=item _lastError()
+
+ Return the error recorded for the domain being processed
+
+ Return string Error message, never empty
+
+=cut
+
+sub _lastError
+{
+    my $self = shift;
+
+    $self->{'lastError'} || scalar getMessageByType( 'error' ) || 'Unknown error';
 }
 
 =item _domainTypeAndId($domainId, $aliasId, $subdomainId)
@@ -362,8 +432,7 @@ sub _addCertificate
     debug("_addCertificate ");
 
     if (!$self->{'testmode'} && _lookup($certName) != 0) {
-        error("Cannot resolve $certName");
-        return 1;
+        return $self->_error( "Cannot resolve $certName" );
     }
 
     # Fake out the SSL_SUPPORT in the Domains module by updating the ssl_certs table and creating a fake cert file
@@ -389,13 +458,39 @@ sub _addCertificate
         \$stdout, \$stderr
     );
     debug( $command );
-    debug( $stdout ) if $stdout;     
-    $rs == 0 or die( $stderr || "unknown error $rs" );
+    debug( $stdout ) if $stdout;
+    # certbot exits non-zero for conditions that are none of our business to recover from, such as a
+    # domain that does not resolve yet. Report those against the domain rather than failing the run.
+    return $self->_error( _certbotError( $certName, $rs, $stdout, $stderr ) ) if $rs;
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
-    $self->_triggerDomainOnChange($type, $id);
- 
-    0;
+    return $self->_triggerDomainOnChange($type, $id);
+}
+
+=item _certbotError($certName, $rs, $stdout, $stderr)
+
+ Returns the message describing a failed certbot invocation
+
+ Param string $certName Primary name of the target certificate / domain
+ Param int $rs Exit code returned by certbot
+ Param string $stdout Standard output of certbot
+ Param string $stderr Standard error of certbot
+ Return string Error message
+
+=cut
+
+sub _certbotError
+{
+    my ($certName, $rs, $stdout, $stderr) = @_;
+
+    # certbot reports the reason for the failure on stderr, but falls back to stdout when it fails
+    # before it gets that far.
+    for my $output ($stderr, $stdout) {
+        next unless defined $output && $output =~ /\S/;
+        return sprintf( 'certbot failed for %s: %s', $certName, $output );
+    }
+
+    sprintf( 'certbot failed for %s with exit code %d', $certName, $rs );
 }
 
 sub _updateSelfSignedCertificate
@@ -457,8 +552,7 @@ sub _updateSelfSignedCertificate
         );
     }
     unless (ref $rs eq 'HASH') {
-        error($rs);
-        return 1;
+        return $self->_error( $rs );
     }
 
     0;
@@ -489,12 +583,11 @@ sub _triggerDomainOnChange
             $id
         );
     } else {
-        error ( 'Unsupported domain type ' . $type);
+        $self->_error( 'Unsupported domain type ' . $type );
         return 2;
     }
     unless (ref $rs eq 'HASH') {
-        error( $rs );
-        return 1;
+        return $self->_error( $rs );
     }
 
     0;
@@ -560,8 +653,7 @@ sub _updateForward
         $hsts, $type, $id
     );
     unless (ref $rs eq 'HASH') {
-        error( $rs );
-        return 1;
+        return $self->_error( $rs );
     }
 
     # This requires a rebuild of the domain, but assume that this is triggered elsewhere
@@ -592,8 +684,7 @@ sub _deleteCertificate
         $type, $id
     );
     unless (ref $rs eq 'HASH') {
-        error( $rs );
-        return 1;
+        return $self->_error( $rs );
     }
 
     # Delete the fake cert file, its not valid PEM but that doesn't matter.
@@ -604,9 +695,7 @@ sub _deleteCertificate
     }
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
-    $self->_triggerDomainOnChange($type, $id);
- 
-    0;
+    return $self->_triggerDomainOnChange($type, $id);
 }
 
 =item _letsencryptInstall()

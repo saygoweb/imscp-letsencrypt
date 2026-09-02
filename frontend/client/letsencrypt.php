@@ -36,6 +36,9 @@ function letsencrypt_statusIcon($status) {
         $statusIcon = 'ok';
     } elseif ($status == 'disabled') {
         $statusIcon = 'disabled';
+    } elseif ($status == 'error') {
+        // The last certbot request for this domain failed, the reason is reported as the note
+        $statusIcon = 'error';
     } elseif (in_array(
         $status,
         array('toadd', 'tochange', 'todelete', 'torestore', 'toenable', 'todisable'))
@@ -43,6 +46,19 @@ function letsencrypt_statusIcon($status) {
         $statusIcon = 'reload';
     }
     return $statusIcon;
+}
+
+/**
+ * Translate the given LetsEncrypt status
+ *
+ * @param string $status
+ * @return string
+ */
+function letsencrypt_statusText($status) {
+    if ($status == 'error') {
+        return tr('Error');
+    }
+    return translate_dmn_status($status); // TODO Improve the translation for ssl CP 2017-07
 }
 
 /**
@@ -76,10 +92,10 @@ function letsencrypt_generateDomains($tpl)
         $tpl->assign(array(
             'DOMAIN_NAME'      => decode_idna($row['domain_name']),
             'ID'               => $row['domain_id'],
-            'NOTE'             => $row['state'] ? $row['state'] : '',
+            'NOTE'             => $row['state'] ? tohtml($row['state']) : '',
             'EDIT'             => tr('Edit'),
             'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $type . '&id=' . $id,
-            'STATUS'           => translate_dmn_status($row['status']), // TODO Improve the translation for ssl CP 2017-07
+            'STATUS'           => letsencrypt_statusText($row['status']),
             'STATUS_ICON'      => $statusIcon,
             'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
             'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO
@@ -128,10 +144,10 @@ function letsencrypt_generateDomains($tpl)
         $tpl->assign(array(
             'DOMAIN_NAME'      => decode_idna($row['alias_name']),
             'ID'               => $row['alias_id'],
-            'NOTE'             => $row['state'] ? $row['state'] : '',
+            'NOTE'             => $row['state'] ? tohtml($row['state']) : '',
             'EDIT'             => tr('Edit'),
             'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $type . '&id=' . $id,
-            'STATUS'           => translate_dmn_status($row['status']), // TODO Improve the translation for ssl CP 2017-07
+            'STATUS'           => letsencrypt_statusText($row['status']),
             'STATUS_ICON'      => $statusIcon,
             'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
             'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO
@@ -181,10 +197,10 @@ function letsencrypt_generateDomains($tpl)
         $tpl->assign(array(
             'DOMAIN_NAME'      => decode_idna($row['subdomain_name'] . '.' . $row['domain_name']),
             'ID'               => $row['subdomain_id'],
-            'NOTE'             => $row['state'] ? $row['state'] : '',
+            'NOTE'             => $row['state'] ? tohtml($row['state']) : '',
             'EDIT'             => tr('Edit'),
             'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $type . '&id=' . $id,
-            'STATUS'           => translate_dmn_status($row['status']), // TODO Improve the translation for ssl CP 2017-07
+            'STATUS'           => letsencrypt_statusText($row['status']),
             'STATUS_ICON'      => $statusIcon,
             'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
             'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO

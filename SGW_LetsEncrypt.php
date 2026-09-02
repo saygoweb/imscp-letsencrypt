@@ -187,13 +187,15 @@ class SGW_LetsEncrypt extends AbstractPlugin
      */
     public function getItemWithErrorStatus()
     {
+        // The 'error' status is expected: it records a certbot request that failed for a reason the
+        // customer can resolve and retry themselves, so it is not reported as needing attention here.
         $stmt = exec_query(
             "
                 SELECT letsencrypt_id AS item_id, cert_name AS item_name,
                     'letsencrypt' AS `table`, 'status' AS field
-                FROM letsencrypt WHERE status NOT IN(?, ?, ?, ?, ?, ?, ?)
+                FROM letsencrypt WHERE status NOT IN(?, ?, ?, ?, ?, ?, ?, ?)
             ",
-            array('ok', 'disabled', 'toadd', 'tochange', 'toenable', 'todisable', 'todelete')
+            array('ok', 'disabled', 'error', 'toadd', 'tochange', 'toenable', 'todisable', 'todelete')
         );
 
         if ($stmt->rowCount()) {
@@ -214,7 +216,10 @@ class SGW_LetsEncrypt extends AbstractPlugin
     public function changeItemStatus($table, $field, $itemId)
     {
         if ($table == 'letsencrypt' && $field == 'status') {
-            exec_query('UPDATE letsencrypt SET `status` = ? WHERE letsencrypt_id = ?', array('tochange', $itemId));
+            exec_query(
+                "UPDATE letsencrypt SET `status` = ?, `state` = '' WHERE letsencrypt_id = ?",
+                array('tochange', $itemId)
+            );
         }
     }
 
