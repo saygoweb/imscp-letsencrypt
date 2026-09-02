@@ -24,6 +24,17 @@ GetOptions(
     @options,
 ) or showUsage();
 
+# Allow the failure path to be exercised in test mode: certbot reports any domain under
+# .fail.local as one it could not authenticate, the way it does for a domain that does not resolve.
+if ($domain =~ /\.fail\.local$/) {
+    print STDERR "Certbot failed to authenticate some domains (authenticator: apache). "
+        . "The Certificate Authority reported these problems:\n"
+        . "  Domain: $domain\n"
+        . "  Type:   dns\n"
+        . "  Detail: DNS problem: NXDOMAIN looking up A for $domain\n";
+    exit 1;
+}
+
 # Ensure the store_path exists
 mkpath($store_path);
 

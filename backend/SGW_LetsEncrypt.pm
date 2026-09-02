@@ -42,6 +42,9 @@ use parent 'Common::SingletonClass';
 
 use Data::Dumper;
 
+# Maximum length of an error message recorded in the letsencrypt.state column
+use constant ERROR_MAX_LENGTH => 1000;
+
 =head1 DESCRIPTION
 
  This package provides the backend part for the i-MSCP LetsEncrypt plugin.
@@ -226,28 +229,36 @@ sub run
         return 1;
     }
 
-    my @sql;
     for(values %{$rows}) {
         my ($type, $id) = $self->_domainTypeAndId($_->{'domain_id'}, $_->{'alias_id'}, $_->{'subdomain_id'});
+
+        # Any error raised while processing this domain is recorded against the domain itself, it
+        # must not abort the run nor put the plugin as a whole into an error state.
+        $self->_clearError();
+
+        my @sql;
         if ($_->{'status'} =~ /^to(?:add|change)$/) {
             my $rs = $self->_addCertificate( $type, $id, $_->{'cert_name'} );
             $rs |= $self->_updateForward( $type, $id, $_->{'cert_name'}, $_->{'http_forward'} );
             @sql = (
-                'UPDATE letsencrypt SET status = ? WHERE letsencrypt_id = ?',
-                ($rs ? scalar getMessageByType( 'error' ) || 'Unknown error' : 'ok'), $_->{'letsencrypt_id'}
+                'UPDATE letsencrypt SET status = ?, state = ? WHERE letsencrypt_id = ?',
+                ($rs ? 'error' : 'ok'), ($rs ? $self->_lastError() : ''), $_->{'letsencrypt_id'}
             );
         } elsif ($_->{'status'} eq 'todelete') {
             my $rs = $self->_deleteCertificate( $type, $id, $_->{'cert_name'} );
             $rs |= $self->_updateForward( $type, $id, $_->{'cert_name'}, 0 );
             if ($rs) {
                 @sql = (
-                    'UPDATE letsencrypt SET status = ? WHERE letsencrypt_id = ?',
-                    (scalar getMessageByType( 'error' ) || 'Unknown error'), $_->{'letsencrypt_id'}
+                    'UPDATE letsencrypt SET status = ?, state = ? WHERE letsencrypt_id = ?',
+                    'error', $self->_lastError(), $_->{'letsencrypt_id'}
                 );
             } else {
                 @sql = ('DELETE FROM letsencrypt WHERE letsencrypt_id = ?', $_->{'letsencrypt_id'});
             }
+        } else {
+            next;
         }
+
         # Update the status of the last operation
         # Comment out the below for dev testing CP 2017-06
         my $qrs = $self->{'db'}->doQuery( 'dummy', @sql );
@@ -294,6 +305,65 @@ sub _init
     iMSCP::EventManager->getInstance()->register( 'afterHttpdBuildConf', sub { $self->_onAfterHttpdBuildConf( @_ ); } );
 
     $self;
+}
+
+=item _clearError()
+
+ Forget the error recorded for the domain previously processed
+
+ Return int 0
+
+=cut
+
+sub _clearError
+{
+    my $self = shift;
+
+    undef $self->{'lastError'};
+
+    0;
+}
+
+=item _error($message)
+
+ Record an error against the domain being processed and log it
+
+ The message is normalised so that it reads well in the frontend, where it is reported
+ against the domain as its state.
+
+ Param string $message Error message
+ Return int 1
+
+=cut
+
+sub _error
+{
+    my ($self, $message) = @_;
+
+    $message = 'Unknown error' unless defined $message && $message =~ /\S/;
+    $message =~ s/\s+/ /g;
+    $message =~ s/^ | $//g;
+    $message = substr( $message, 0, ERROR_MAX_LENGTH - 3 ).'...' if length $message > ERROR_MAX_LENGTH;
+
+    $self->{'lastError'} = $message;
+    error( $message );
+
+    1;
+}
+
+=item _lastError()
+
+ Return the error recorded for the domain being processed
+
+ Return string Error message, never empty
+
+=cut
+
+sub _lastError
+{
+    my $self = shift;
+
+    $self->{'lastError'} || scalar getMessageByType( 'error' ) || 'Unknown error';
 }
 
 =item _domainTypeAndId($domainId, $aliasId, $subdomainId)
@@ -362,8 +432,7 @@ sub _addCertificate
     debug("_addCertificate ");
 
     if (!$self->{'testmode'} && _lookup($certName) != 0) {
-        error("Cannot resolve $certName");
-        return 1;
+        return $self->_error( "Cannot resolve $certName" );
     }
 
     # Fake out the SSL_SUPPORT in the Domains module by updating the ssl_certs table and creating a fake cert file
@@ -389,19 +458,56 @@ sub _addCertificate
         \$stdout, \$stderr
     );
     debug( $command );
-    debug( $stdout ) if $stdout;     
-    $rs == 0 or die( $stderr || "unknown error $rs" );
+    debug( $stdout ) if $stdout;
+    # certbot exits non-zero for conditions that are none of our business to recover from, such as a
+    # domain that does not resolve yet. Report those against the domain rather than failing the run.
+    if ($rs) {
+        my $message = _certbotError( $certName, $rs, $stdout, $stderr );
+        # No certificate was issued, so take back the placeholder that was put in place for it.
+        # Left behind it would give the domain SSL support backed by /etc/letsencrypt files that
+        # do not exist, and the next rebuild of the domain would produce a vhost httpd cannot load.
+        $self->_revertSelfSignedCertificate( $type, $id );
+        return $self->_error( $message );
+    }
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
-    $self->_triggerDomainOnChange($type, $id);
- 
-    0;
+    return $self->_triggerDomainOnChange($type, $id);
+}
+
+=item _certbotError($certName, $rs, $stdout, $stderr)
+
+ Returns the message describing a failed certbot invocation
+
+ Param string $certName Primary name of the target certificate / domain
+ Param int $rs Exit code returned by certbot
+ Param string $stdout Standard output of certbot
+ Param string $stderr Standard error of certbot
+ Return string Error message
+
+=cut
+
+sub _certbotError
+{
+    my ($certName, $rs, $stdout, $stderr) = @_;
+
+    # certbot reports the reason for the failure on stderr, but falls back to stdout when it fails
+    # before it gets that far.
+    for my $output ($stderr, $stdout) {
+        next unless defined $output && $output =~ /\S/;
+        return sprintf( 'certbot failed for %s: %s', $certName, $output );
+    }
+
+    sprintf( 'certbot failed for %s with exit code %d', $certName, $rs );
 }
 
 sub _updateSelfSignedCertificate
 {
     my ($self, $type, $id) = @_;
     my $rs = 0;
+
+    # Nothing to undo until the ssl_certs table has actually been written to
+    undef $self->{'sslCertUndo'};
+
     my $result = $self->{'db'}->doQuery(
         'cert_id',
         'SELECT * FROM ssl_certs WHERE domain_type = ? AND domain_id = ?',
@@ -411,9 +517,10 @@ sub _updateSelfSignedCertificate
     my $keyFile = iMSCP::File->new(filename => $keyTempFile->filename);
     my $certTempFile = File::Temp->new(UNLINK => 1);
     my $certFile = iMSCP::File->new(filename => $certTempFile->filename);
+    my $record;
     if (%{$result}) {
         my $certId = each %{$result};
-        my $record = $result->{$certId};
+        $record = $result->{$certId};
         # If we have a key or certificate check to see if they are valid
         if ($record->{'private_key'} || $record->{'certificate'}) {
             $keyFile->set($record->{'private_key'});
@@ -441,8 +548,16 @@ sub _updateSelfSignedCertificate
     my $key = $keyFile->get();
     my $cert = $certFile->get();
 
+    # Remember what is being replaced so that it can be put back should the certificate request
+    # that follows fail, see _revertSelfSignedCertificate()
     if (%{$result}) {
         # Update
+        $self->{'sslCertUndo'} = {
+            action      => 'update',
+            status      => $record->{'status'},
+            private_key => $record->{'private_key'},
+            certificate => $record->{'certificate'}
+        };
         $rs = $self->{'db'}->doQuery(
             'u',
             "UPDATE ssl_certs SET status='tochange', private_key=?, certificate=? WHERE domain_type=? AND domain_id=? ",
@@ -450,6 +565,7 @@ sub _updateSelfSignedCertificate
         );
     } else {
         # Insert
+        $self->{'sslCertUndo'} = { action => 'delete' };
         $rs = $self->{'db'}->doQuery(
             'i',
             "INSERT INTO ssl_certs (status, private_key, certificate, domain_type, domain_id) VALUES ('toadd', ?, ?, ?, ?)",
@@ -457,7 +573,51 @@ sub _updateSelfSignedCertificate
         );
     }
     unless (ref $rs eq 'HASH') {
-        error($rs);
+        # The write did not happen, so there is nothing to undo
+        undef $self->{'sslCertUndo'};
+        return $self->_error( $rs );
+    }
+
+    0;
+}
+
+=item _revertSelfSignedCertificate($type, $id)
+
+ Undo the ssl_certs change made by _updateSelfSignedCertificate()
+
+ Called when the certificate request fails, so that the domain is not left claiming SSL support
+ backed by a certificate that was never issued. Does nothing when the table was not written to.
+
+ Param string $type Domain type (dmn|als|sub)
+ Param int $id Domain unique identifier
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _revertSelfSignedCertificate
+{
+    my ($self, $type, $id) = @_;
+
+    my $undo = delete $self->{'sslCertUndo'};
+    return 0 unless $undo;
+
+    my $rs;
+    if ($undo->{'action'} eq 'update') {
+        $rs = $self->{'db'}->doQuery(
+            'u',
+            'UPDATE ssl_certs SET status = ?, private_key = ?, certificate = ? WHERE domain_type = ? AND domain_id = ?',
+            $undo->{'status'}, $undo->{'private_key'}, $undo->{'certificate'}, $type, $id
+        );
+    } else {
+        $rs = $self->{'db'}->doQuery(
+            'd',
+            'DELETE FROM ssl_certs WHERE domain_type = ? AND domain_id = ?',
+            $type, $id
+        );
+    }
+    unless (ref $rs eq 'HASH') {
+        # Logged on its own, the caller reports why the certificate request failed in the first place
+        error( $rs );
         return 1;
     }
 
@@ -489,12 +649,11 @@ sub _triggerDomainOnChange
             $id
         );
     } else {
-        error ( 'Unsupported domain type ' . $type);
+        $self->_error( 'Unsupported domain type ' . $type );
         return 2;
     }
     unless (ref $rs eq 'HASH') {
-        error( $rs );
-        return 1;
+        return $self->_error( $rs );
     }
 
     0;
@@ -560,8 +719,7 @@ sub _updateForward
         $hsts, $type, $id
     );
     unless (ref $rs eq 'HASH') {
-        error( $rs );
-        return 1;
+        return $self->_error( $rs );
     }
 
     # This requires a rebuild of the domain, but assume that this is triggered elsewhere
@@ -592,8 +750,7 @@ sub _deleteCertificate
         $type, $id
     );
     unless (ref $rs eq 'HASH') {
-        error( $rs );
-        return 1;
+        return $self->_error( $rs );
     }
 
     # Delete the fake cert file, its not valid PEM but that doesn't matter.
@@ -604,9 +761,7 @@ sub _deleteCertificate
     }
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
-    $self->_triggerDomainOnChange($type, $id);
- 
-    0;
+    return $self->_triggerDomainOnChange($type, $id);
 }
 
 =item _letsencryptInstall()

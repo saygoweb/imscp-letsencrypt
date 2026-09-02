@@ -1,5 +1,15 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 2.0.2
+
+* Fix a failing certbot request putting the whole plugin into an error state. A domain whose
+  certificate request fails, for instance because its DNS has not propagated yet, is now given
+  the 'error' status, the reason reported by certbot is recorded as its note, and an error icon
+  is shown against it. The customer can retry by re-enabling the domain.
+* The placeholder entry written to ssl_certs before a certificate is requested is now taken back
+  when the request fails, so a domain is no longer left with SSL support backed by a certificate
+  that was never issued.
+
 ## Version 1.5.2
 
 * Fix #15 gethostbyname detection can be fooled:

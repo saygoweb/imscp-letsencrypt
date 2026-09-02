@@ -223,10 +223,11 @@ function client_editLetsEncrypt()
     $status = $_POST['enabled'] == 'yes' ? 'toadd' : 'todelete';
     $http_forward = $_POST['http_forward'] == 'yes' ? 1 : 0;
 
+    // Clear any error recorded by a previous request, it no longer describes the domain
     exec_query(
         '
             UPDATE letsencrypt
-            SET http_forward = ?, status = ?
+            SET http_forward = ?, status = ?, state = \'\'
             WHERE letsencrypt_id = ?
         ',
         array($http_forward, $status, $data['letsencrypt_id'])

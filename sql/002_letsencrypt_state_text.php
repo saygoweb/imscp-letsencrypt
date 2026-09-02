@@ -1,6 +1,6 @@
 <?php
 /**
- * i-MSCP SGW_LetsEncrypt plugin
+ * i-MSCP LetsEncrypt plugin
  * Copyright (C) 2017 Cambell Prince <cambell.prince@gmail.com>
  *
  * This program is free software; you can redistribute it and/or
@@ -18,13 +18,14 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
+// The state column now carries the reason a certbot request failed, which does not fit in 255 characters.
 return array(
-    'author' => 'Cambell Prince',
-    'email' => 'cambell.prince@gmail.com',
-    'version' => '2.0.2',
-    'require_api' => '1.5.1',
-    'date' => '2026-09-02',
-    'name' => 'SGW_LetsEncrypt',
-    'desc' => 'Plugin that provides LetsEncrypt SSL certificates.',
-    'url' => 'https://github.com/saygoweb/imscp-plugin-letsencrypt'
+    'up'   => "
+        ALTER TABLE `letsencrypt`
+        MODIFY `state` TEXT CHARACTER SET utf8 COLLATE utf8_unicode_ci NOT NULL
+    ",
+    'down' => "
+        ALTER TABLE `letsencrypt`
+        MODIFY `state` VARCHAR(255) CHARACTER SET utf8 COLLATE utf8_unicode_ci NOT NULL
+    "
 );
