@@ -176,6 +176,8 @@ class SGW_LetsEncrypt extends AbstractPlugin
             '/reseller/letsencrypt.php'    => $pluginDir . '/frontend/reseller/letsencrypt.php',
             '/client/letsencrypt.php'      => $pluginDir . '/frontend/client/letsencrypt.php',
             '/client/letsencrypt_edit.php' => $pluginDir . '/frontend/client/letsencrypt_edit.php',
+            // Polled by the LetsEncrypt page while the backend still has certificates to request
+            '/client/letsencrypt_status.php' => $pluginDir . '/frontend/client/letsencrypt_status.php',
             '/client/test.php' => $pluginDir . '/frontend/client/test.php'
         );
     }

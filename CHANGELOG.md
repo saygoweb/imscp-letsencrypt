@@ -1,5 +1,13 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 2.0.3
+
+* The LetsEncrypt page now updates the status, note and forward columns of a domain by itself while
+  the backend is requesting its certificate, which takes tens of seconds. It polls the new
+  /client/letsencrypt_status.php endpoint every three seconds for the first minute, then every ten
+  seconds, and stops once no domain is waiting on the backend or after five minutes. A page with
+  nothing pending on it never polls.
+
 ## Version 2.0.2
 
 * Fix a failing certbot request putting the whole plugin into an error state. A domain whose

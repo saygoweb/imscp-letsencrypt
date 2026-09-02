@@ -24,41 +24,36 @@ use iMSCP\Event\EventAggregator;
 use iMSCP\Event\Events;
 use iMSCP\Plugin\SGW_LetsEncrypt\SGW_LetsEncrypt;
 use iMSCP\TemplateEngine;
-use PDO;
+
+require_once __DIR__ . '/letsencrypt_common.php';
 
 /***********************************************************************************************************************
  * Functions
  */
 
-function letsencrypt_statusIcon($status) {
-    $statusIcon = 'error';
-    if ($status == 'ok') {
-        $statusIcon = 'ok';
-    } elseif ($status == 'disabled') {
-        $statusIcon = 'disabled';
-    } elseif ($status == 'error') {
-        // The last certbot request for this domain failed, the reason is reported as the note
-        $statusIcon = 'error';
-    } elseif (in_array(
-        $status,
-        array('toadd', 'tochange', 'todelete', 'torestore', 'toenable', 'todisable'))
-    ) {
-        $statusIcon = 'reload';
-    }
-    return $statusIcon;
-}
-
 /**
- * Translate the given LetsEncrypt status
+ * Assign a single domain, alias or subdomain to the current template block
  *
- * @param string $status
- * @return string
+ * @param $tpl TemplateEngine
+ * @param array $row Row as returned by letsencrypt_fetchRows()
+ * @return void
  */
-function letsencrypt_statusText($status) {
-    if ($status == 'error') {
-        return tr('Error');
-    }
-    return translate_dmn_status($status); // TODO Improve the translation for ssl CP 2017-07
+function letsencrypt_assignRow($tpl, $row)
+{
+    $tpl->assign(array(
+        'DOMAIN_NAME'      => tohtml($row['name']),
+        'ID'               => $row['id'],
+        'NOTE'             => tohtml($row['state']),
+        'EDIT'             => tr('Edit'),
+        'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $row['type'] . '&id=' . $row['id'],
+        'STATUS'           => letsencrypt_statusText($row['status']),
+        'STATUS_ICON'      => letsencrypt_statusIcon($row['status']),
+        // Marks the rows the backend still has to act on, so that the page only starts polling
+        // letsencrypt_status.php when there is something to wait for
+        'PENDING'          => $row['pending'] ? ' data-le-pending' : '',
+        'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
+        'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO
+    ));
 }
 
 /**
@@ -69,37 +64,8 @@ function letsencrypt_statusText($status) {
  */
 function letsencrypt_generateDomains($tpl)
 {
-    $stmt = exec_query(
-        '
-            SELECT domain.domain_id AS domain_id, domain_name, domain_admin_id, http_forward, status, state
-            FROM domain
-            LEFT JOIN letsencrypt ON (
-                domain.domain_id=letsencrypt.domain_id
-            )
-            WHERE domain_admin_id = ?
-        ',
-        array($_SESSION['user_id'])
-    );
-
-    while ($row = $stmt->fetchRow(PDO::FETCH_ASSOC)) {
-        if (!$row['status']) {
-            $row['status'] = 'disabled';
-        }
-        $statusIcon = letsencrypt_statusIcon($row['status']);
-        $type = 'domain';
-        $id = $row['domain_id'];
-
-        $tpl->assign(array(
-            'DOMAIN_NAME'      => decode_idna($row['domain_name']),
-            'ID'               => $row['domain_id'],
-            'NOTE'             => $row['state'] ? tohtml($row['state']) : '',
-            'EDIT'             => tr('Edit'),
-            'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $type . '&id=' . $id,
-            'STATUS'           => letsencrypt_statusText($row['status']),
-            'STATUS_ICON'      => $statusIcon,
-            'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
-            'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO
-        ));
+    foreach (letsencrypt_fetchRows('domain', $_SESSION['user_id']) as $row) {
+        letsencrypt_assignRow($tpl, $row);
         $tpl->parse('DOMAIN_ITEM', '.domain_item'); // TODO
     }
 }
@@ -110,22 +76,11 @@ function letsencrypt_generateDomains($tpl)
  * @param $tpl TemplateEngine
  * @return void
  */
- function letsencrypt_generateAliases($tpl)
- {
-     $stmt = exec_query(
-         '
-             SELECT domain_aliasses.alias_id AS alias_id, alias_name, domain_admin_id, http_forward, status, state
-             FROM domain
-             INNER JOIN domain_aliasses ON (domain.domain_id = domain_aliasses.domain_id)
-             LEFT JOIN letsencrypt ON (
-                 domain_aliasses.alias_id=letsencrypt.alias_id
-             )
-             WHERE domain_admin_id = ?
-         ',
-         array($_SESSION['user_id'])
-     );
- 
-    if (!$stmt->rowCount()) {
+function letsencrypt_generateAliases($tpl)
+{
+    $rows = letsencrypt_fetchRows('alias', $_SESSION['user_id']);
+
+    if (!count($rows)) {
         $tpl->assign(array(
             'ALS_MSG' => tr('You do not have domain aliases.'),
             'ALS_LIST' => ''
@@ -133,52 +88,24 @@ function letsencrypt_generateDomains($tpl)
         return;
     }
 
-    while ($row = $stmt->fetchRow(PDO::FETCH_ASSOC)) {
-        if (!$row['status']) {
-            $row['status'] = 'disabled';
-        }
-        $statusIcon = letsencrypt_statusIcon($row['status']);
-        $type = 'alias';
-        $id = $row['alias_id'];
-
-        $tpl->assign(array(
-            'DOMAIN_NAME'      => decode_idna($row['alias_name']),
-            'ID'               => $row['alias_id'],
-            'NOTE'             => $row['state'] ? tohtml($row['state']) : '',
-            'EDIT'             => tr('Edit'),
-            'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $type . '&id=' . $id,
-            'STATUS'           => letsencrypt_statusText($row['status']),
-            'STATUS_ICON'      => $statusIcon,
-            'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
-            'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO
-        ));
+    foreach ($rows as $row) {
+        letsencrypt_assignRow($tpl, $row);
         $tpl->parse('ALS_ITEM', '.als_item'); // TODO
     }
     $tpl->assign('ALS_MESSAGE', '');
- }
- 
+}
+
 /**
  * Generate subdomains
  *
  * @param $tpl TemplateEngine
  * @return void
  */
- function letsencrypt_generateSubdomains($tpl)
- {
-     $stmt = exec_query(
-         '
-             SELECT subdomain.subdomain_id AS subdomain_id, subdomain_name, domain_name, domain_admin_id, http_forward, status, state
-             FROM domain
-             INNER JOIN subdomain ON (domain.domain_id = subdomain.domain_id)
-             LEFT JOIN letsencrypt ON (
-                 subdomain.subdomain_id=letsencrypt.subdomain_id
-             )
-             WHERE domain_admin_id = ?
-         ',
-         array($_SESSION['user_id'])
-     );
- 
-    if (!$stmt->rowCount()) {
+function letsencrypt_generateSubdomains($tpl)
+{
+    $rows = letsencrypt_fetchRows('subdomain', $_SESSION['user_id']);
+
+    if (!count($rows)) {
         $tpl->assign(array(
             'SUB_MSG' => tr('You do not have subdomains.'),
             'SUB_LIST' => ''
@@ -186,31 +113,12 @@ function letsencrypt_generateDomains($tpl)
         return;
     }
 
-    while ($row = $stmt->fetchRow(PDO::FETCH_ASSOC)) {
-        if (!$row['status']) {
-            $row['status'] = 'disabled';
-        }
-        $statusIcon = letsencrypt_statusIcon($row['status']);
-        $type = 'subdomain';
-        $id = $row['subdomain_id'];
-
-        $tpl->assign(array(
-            'DOMAIN_NAME'      => decode_idna($row['subdomain_name'] . '.' . $row['domain_name']),
-            'ID'               => $row['subdomain_id'],
-            'NOTE'             => $row['state'] ? tohtml($row['state']) : '',
-            'EDIT'             => tr('Edit'),
-            'EDIT_LINK'        => 'letsencrypt_edit.php?type=' . $type . '&id=' . $id,
-            'STATUS'           => letsencrypt_statusText($row['status']),
-            'STATUS_ICON'      => $statusIcon,
-            'HTTP_FORWARD'     => $row['http_forward'] ? tr('yes') : tr('no'),
-            'HTTP_FORWRD_ICON' => $row['http_forward'] ? 'check' : '', // TODO
-        ));
+    foreach ($rows as $row) {
+        letsencrypt_assignRow($tpl, $row);
         $tpl->parse('SUB_ITEM', '.sub_item'); // TODO
     }
     $tpl->assign('SUB_MESSAGE', '');
- }
- 
-
+}
 
 /***********************************************************************************************************************
  * Main
