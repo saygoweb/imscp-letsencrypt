@@ -35,6 +35,30 @@ you plan to upload using the plugin management interface.
 1. Upload the plugin through the plugin management interface
 2. Install the plugin through the plugin management interface
 
+## Building
+
+Packaging is driven by [phpmake](https://github.com/saygoweb/phpmake), which reads the targets from
+`makefile.json`.
+
+```
+make.phar package
+```
+
+| target        | effect                                                            |
+|---------------|-------------------------------------------------------------------|
+| `package`     | build the release archive, currently `package-tar`                |
+| `package-tar` | package the plugin as `SGW_LetsEncrypt.tgz`                       |
+| `package-zip` | package the plugin as `SGW_LetsEncrypt.zip`                       |
+| `db-backup`   | dump the development database to `data/imscp_dev.sql.gz`          |
+
+Only tgz and bzip2 archives can be uploaded through the i-MSCP plugin management interface, which is
+why `package` builds the tgz. `package-zip` is kept for the odd occasion a zip is wanted.
+
+`db-backup` connects as `$USER` and takes the password from the `password_db` environment variable.
+
+What is kept out of the release archive is listed in `upload-exclude.txt` for tar and
+`upload-exclude-zip.txt` for zip.
+
 ## How to Help
 
 * Report issues you find in our [GitHub Issue Tracker](https://github.com/saygoweb/imscp-letsencrypt/issues). Please report with as much detail as you can. Simply saying "It doesn't work" will gain you sympathy, but not a lot else.

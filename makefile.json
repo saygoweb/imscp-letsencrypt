@@ -1,0 +1,29 @@
+{
+    "variables": {
+        "name": "SGW_LetsEncrypt"
+    },
+    "db-backup": {
+        "by": [
+            "mkdir -p data",
+            "/usr/bin/mysqldump -u $USER --password=$password_db --result-file=data/imscp_dev.sql imscp",
+            "gzip -f data/imscp_dev.sql"
+        ]
+    },
+    "package-zip": {
+        "by": [
+            "rm -f *.zip",
+            "zip -r -x@./upload-exclude-zip.txt -y -q ./{{name}}.zip ."
+        ]
+    },
+    "package-tar": {
+        "by": [
+            "rm -f *.tgz",
+            "tar -cvzf ./{{name}}.tgz --transform 's|./|{{name}}/|' -X upload-exclude.txt ./*"
+        ]
+    },
+    "package": {
+        "depends": [
+            "package-tar"
+        ]
+    }
+}
