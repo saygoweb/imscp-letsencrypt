@@ -669,6 +669,17 @@ sub _triggerDomainOnChange
 sub _onAfterHttpdBuildConf
 {
     my ($self, $cfgTpl, $filename, $data) = @_;
+
+    if ($filename eq 'domain_disabled.tpl') {
+        my $domain = $data->{'DOMAIN_NAME'};
+        my $renewalFile = iMSCP::File->new( filename => "/etc/letsencrypt/renewal/$domain.conf" );
+        if (-f $renewalFile->{'filename'}) {
+            debug("Removing renewal config for disabled domain: " . $renewalFile->{'filename'});
+            $renewalFile->delFile();
+        }
+        return 0;
+    }
+
     return unless $filename eq 'domain.tpl';
 
     my $domain = $data->{'DOMAIN_NAME'};
@@ -758,6 +769,13 @@ sub _deleteCertificate
     debug($certificate->{'filename'});
     if (-f $certificate->{'filename'}) {
         $certificate->delFile();
+    }
+
+    # Remove Let's Encrypt renewal configuration
+    my $renewalFile = iMSCP::File->new( filename => "/etc/letsencrypt/renewal/$certName.conf" );
+    if (-f $renewalFile->{'filename'}) {
+        debug("Removing renewal config: " . $renewalFile->{'filename'});
+        $renewalFile->delFile();
     }
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.

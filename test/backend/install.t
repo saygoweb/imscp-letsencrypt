@@ -8,7 +8,7 @@ use lib (abs_path('../../backend'), abs_path('../../../../../engine/PerlLib'));
 
 use iMSCP::Bootstrapper;
 
-use LetsEncrypt;
+use SGW_LetsEncrypt;
 
 my $bootstrapper = iMSCP::Bootstrapper->getInstance();
 $bootstrapper->getInstance()->boot(
@@ -20,6 +20,6 @@ $bootstrapper->getInstance()->boot(
     }
 );
 
-my $plugin = Plugin::LetsEncrypt->getInstance();
+my $plugin = Plugin::SGW_LetsEncrypt->getInstance();
 is ($plugin->install(), 0, "install ok");
 ok (-e '/usr/local/bin/certbot-auto', 'certbot-auto exists');
