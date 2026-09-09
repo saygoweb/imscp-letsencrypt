@@ -1,0 +1,66 @@
+name: Version bump
+
+# A pull request merged into main gets a patch bump, so that every merge leaves
+# a version the panel will offer for update: i-MSCP ignores a plugin whose
+# version has not moved.
+#
+# The bump is pushed with GITHUB_TOKEN, and a push made with that token starts
+# no further workflow run, so this cannot loop. If main is a protected branch,
+# either let github-actions[bot] bypass the rule or swap the token for a PAT
+# with contents write, otherwise the push is rejected.
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+# Two pull requests merged at once would otherwise race for the same push.
+concurrency:
+  group: version-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          # The previous commit is needed too, to see whether the merge set the
+          # version itself.
+          fetch-depth: 2
+
+      - name: Bump the patch version
+        run: |
+          set -eu
+          version_of() {
+              git show "$1:info.php" \
+                  | sed -nE "s/^[[:space:]]*'version'[[:space:]]*=> '([^']*)'.*/\1/p"
+          }
+          if [ "$(version_of HEAD)" != "$(version_of HEAD~1)" ]; then
+              echo "The merge set the version to $(version_of HEAD) itself; nothing to do."
+              exit 0
+          fi
+          php tools/version.php patch
+
+      - name: Commit the bump
+        run: |
+          set -eu
+          if git diff --quiet -- info.php; then
+              echo 'info.php is unchanged; nothing to push.'
+              exit 0
+          fi
+          version=$(sed -nE "s/^[[:space:]]*'version'[[:space:]]*=> '([^']*)'.*/\1/p" info.php)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "Bump version to $version" -- info.php
+          # Another merge may have landed while this ran.
+          git pull --rebase origin main
+          git push origin HEAD:main

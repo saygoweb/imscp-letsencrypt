@@ -1,6 +1,23 @@
 {
     "variables": {
-        "name": "SGW_LetsEncrypt"
+        "name": "SGW_LetsEncrypt",
+        "sudo": "sudo",
+        "bump": "patch"
+    },
+    "clean": {
+        "by": [
+            "rm -f ./*.tgz"
+        ]
+    },
+    "test": {
+        "by": [
+            "cd test/backend && {{sudo}} perl all.t"
+        ]
+    },
+    "version": {
+        "by": [
+            "php tools/version.php {{bump}}"
+        ]
     },
     "db-backup": {
         "by": [

@@ -12,7 +12,7 @@ use iMSCP::Execute;
 use iMSCP::OpenSSL;
 use iMSCP::File;
 
-use LetsEncrypt;
+use SGW_LetsEncrypt;
 
 my $bootstrapper = iMSCP::Bootstrapper->getInstance();
 $bootstrapper->getInstance()->boot(

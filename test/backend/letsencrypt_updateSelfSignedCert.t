@@ -8,7 +8,7 @@ use lib (abs_path('../../backend'), abs_path('../../../../../engine/PerlLib'));
 
 use iMSCP::Bootstrapper;
 
-use LetsEncrypt;
+use SGW_LetsEncrypt;
 
 my $bootstrapper = iMSCP::Bootstrapper->getInstance();
 $bootstrapper->getInstance()->boot(
@@ -23,7 +23,7 @@ $bootstrapper->getInstance()->boot(
 my $rs = 0;
 my $result = 0;
 my $db = iMSCP::Database->factory();
-my $plugin = Plugin::LetsEncrypt->getInstance();
+my $plugin = Plugin::SGW_LetsEncrypt->getInstance();
 
 $db->doQuery(
     'q',
@@ -32,7 +32,7 @@ $db->doQuery(
 
 # Should insert a certificate
 $rs = $plugin->_updateSelfSignedCertificate('dmn', 1);
-is($rs, 0, "LetsEncrypt::_updateSelfSignedCertificate No records");
+is($rs, 0, "SGW_LetsEncrypt::_updateSelfSignedCertificate No records");
 
 $result = $db->doQuery(
     'cert_id',
@@ -42,7 +42,7 @@ is (scalar keys %{$result}, 1, "DB has one record");
 
 # Should pass validation and do no harm
 $rs = $plugin->_updateSelfSignedCertificate('dmn', 1);
-is($rs, 0, "LetsEncrypt::_updateSelfSignedCertificate Existing record");
+is($rs, 0, "SGW_LetsEncrypt::_updateSelfSignedCertificate Existing record");
 
 # Remove the private key and certificate from an exiting record.
 $result = $db->doQuery(
@@ -51,4 +51,4 @@ $result = $db->doQuery(
     'dmn', 1
 );
 $rs = $plugin->_updateSelfSignedCertificate('dmn', 1);
-is($rs, 0, "LetsEncrypt::_updateSelfSignedCertificate Invalid record");
+is($rs, 0, "SGW_LetsEncrypt::_updateSelfSignedCertificate Invalid record");
