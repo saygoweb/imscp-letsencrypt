@@ -1,11 +1,11 @@
 name: Version bump
 
-# A pull request merged into main gets a patch bump, so that every merge leaves
+# A pull request merged into master gets a patch bump, so that every merge leaves
 # a version the panel will offer for update: i-MSCP ignores a plugin whose
 # version has not moved.
 #
 # The bump is pushed with GITHUB_TOKEN, and a push made with that token starts
-# no further workflow run, so this cannot loop. If main is a protected branch,
+# no further workflow run, so this cannot loop. If master is a protected branch,
 # either let github-actions[bot] bypass the rule or swap the token for a PAT
 # with contents write, otherwise the push is rejected.
 
@@ -14,7 +14,7 @@ on:
     types:
       - closed
     branches:
-      - main
+      - master
 
 permissions:
   contents: write
@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: master
           # The previous commit is needed too, to see whether the merge set the
           # version itself.
           fetch-depth: 2
@@ -62,5 +62,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m "Bump version to $version" -- info.php
           # Another merge may have landed while this ran.
-          git pull --rebase origin main
-          git push origin HEAD:main
+          git pull --rebase origin master
+          git push origin HEAD:master
