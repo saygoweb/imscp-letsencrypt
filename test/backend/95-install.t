@@ -15,7 +15,16 @@ boot();
 
 my $plugin = plugin();
 
-is( $plugin->install(), 0, 'install succeeds' );
+# The installer dies outright when a command it runs cannot be found. Caught,
+# so that it reads as a failed test with the reason rather than a crashed file.
+sub install_rs
+{
+    my $rs = eval { $plugin->install() };
+    diag( "install() died: $@" ) if $@;
+    $@ ? 'died' : $rs;
+}
+
+is( install_rs(), 0, 'install succeeds' );
 ok( !-e '/usr/local/bin/certbot-auto', 'the retired certbot-auto is gone' );
 ok( -x '/usr/local/bin/certbot' || -x '/snap/bin/certbot' || -x '/usr/bin/certbot', 'certbot is installed' );
 ok( -x '/etc/cron.weekly/letsencrypt', 'the renewal job is installed' );
@@ -25,6 +34,6 @@ my ($certbot) = $cron =~ m{^(\S*certbot) renew}m;
 ok( $certbot, 'the renewal job runs certbot renew' );
 ok( $certbot && -x $certbot, "and the certbot it runs ($certbot) exists" );
 
-is( $plugin->install(), 0, 'installing again is harmless' );
+is( install_rs(), 0, 'installing again is harmless' );
 
 done_testing();
