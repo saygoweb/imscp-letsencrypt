@@ -4,7 +4,7 @@ name: Test
 # saygoweb/imscp publishes; see that repository's
 # .github/workflows/plugin-test.yml. Locally, the same run is
 #
-#   ../imscp/docker/ci/plugin-test.sh --no-install .. imscp-letsencrypt -- 'SGW_DESTRUCTIVE_TESTS=1 sh test/run.sh'
+#   ../imscp/docker/ci/plugin-test.sh --no-install .. imscp-letsencrypt -- 'sh test/run.sh'
 
 on:
   pull_request:
@@ -22,7 +22,8 @@ jobs:
     uses: saygoweb/imscp/.github/workflows/plugin-test.yml@main
     with:
       # test/run.sh needs no installed plugin: it writes to temporary tables
-      # and uses a mock certbot. The destructive tests install the real
-      # certbot, which is fine in a container thrown away afterwards.
+      # and uses a mock certbot. SGW_DESTRUCTIVE_TESTS is left off: its
+      # 95-install.t installs certbot through snap, and snapd cannot run in a
+      # docker container.
       install: false
-      test: SGW_DESTRUCTIVE_TESTS=1 sh test/run.sh
+      test: sh test/run.sh
