@@ -11,7 +11,7 @@
     },
     "test": {
         "by": [
-            "cd test/backend && {{sudo}} perl all.t"
+            "test/docker.sh"
         ]
     },
     "version": {

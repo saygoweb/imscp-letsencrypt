@@ -59,6 +59,40 @@ why `package` builds the tgz. `package-zip` is kept for the odd occasion a zip i
 What is kept out of the release archive is listed in `upload-exclude.txt` for tar and
 `upload-exclude-zip.txt` for zip.
 
+## Testing
+
+The tests run against a real i-MSCP installation: the docker stack in the sibling
+[i-MSCP checkout](https://github.com/saygoweb/imscp) (`docker/imscp up`, see its
+`docker/README.md`), or the CI image built from it.
+
+```
+test/docker.sh               # from this machine, inside the sibling docker stack
+sudo test/run.sh             # on an i-MSCP host, or in CI
+make.phar test               # same as test/docker.sh
+```
+
+Either takes test files to run just those, e.g. `test/docker.sh test/backend/40-run.t`.
+`test/run.sh` is the single entry point: it exits non-zero when any test fails, and its
+header lists the environment it reads.
+
+| file                                | covers                                                              |
+|-------------------------------------|---------------------------------------------------------------------|
+| `test/backend/00-compile.t`         | every Perl and PHP source file parses                               |
+| `test/backend/10-unit.t`            | error reporting and domain type helpers                             |
+| `test/backend/20-httpd-conf.t`      | the vhost rewrite, against the installed `domain.tpl`               |
+| `test/backend/30-selfsigned-cert.t` | the placeholder `ssl_certs` row, and putting it back on failure     |
+| `test/backend/40-run.t`             | `run()` end to end for domains, aliases and subdomains              |
+| `test/backend/90-dns-lookup.t`      | the DNS pre-check; only with `SGW_NETWORK_TESTS=1`                  |
+| `test/backend/95-install.t`         | installing certbot; only with `SGW_DESTRUCTIVE_TESTS=1`             |
+| `test/frontend/common.t`            | the status helpers the client pages use                             |
+
+The tests are safe to run on a shared development server. They do not need the
+plugin to be installed. Everything they write to the database goes into
+`TEMPORARY` tables that shadow `letsencrypt`, `ssl_certs`, `domain`,
+`domain_aliasses` and `subdomain` for the test's own connection. certbot is replaced
+by `backend/certbot-auto-test.pm`, and the files it and the tests create are removed
+when each test ends.
+
 ## How to Help
 
 * Report issues you find in our [GitHub Issue Tracker](https://github.com/saygoweb/imscp-letsencrypt/issues). Please report with as much detail as you can. Simply saying "It doesn't work" will gain you sympathy, but not a lot else.
