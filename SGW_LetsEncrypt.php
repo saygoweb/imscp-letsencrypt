@@ -150,9 +150,9 @@ class SGW_LetsEncrypt extends AbstractPlugin
      */
     public function onClientScriptStart()
     {
-        // if (self::customerHasLetsEncrypt($_SESSION['user_id'])) { // TODO CP 2017-06
+        if (self::customerHasLetsEncrypt($_SESSION['user_id'])) {
             $this->setupNavigation('client');
-        // }
+        }
     }
 
     /**
@@ -263,29 +263,40 @@ class SGW_LetsEncrypt extends AbstractPlugin
     /**
      * Does the given customer has LetsEncrypt feature activated?
      *
+     * True when both hold: the panel's SSL feature is switched on
+     * (ENABLE_SSL, the same setting customerHasFeature('ssl') tests in
+     * gui/include/Client.php), and the customer's own account is active
+     * (admin_status = 'ok') - a suspended or not yet activated customer
+     * gets no access, whatever ENABLE_SSL says.
+     *
+     * Memoised per customer for the request: this is called once per page
+     * by each client script's own gate, and again by setupNavigation()
+     * through onClientScriptStart(), and the GraphQL extension may ask it
+     * about several different customers in the course of one document.
+     *
      * @param int $customerId Customer unique identifier
      * @return bool
      */
     public static function customerHasLetsEncrypt($customerId)
     {
-        static $hasAccess = NULL;
+        static $hasAccess = array();
 
-        return true; // TODO Currently everyone has LetsEncrypt available on their account.
+        if (!array_key_exists($customerId, $hasAccess)) {
+            $cfg = Registry::get('config');
 
-        // if (NULL === $hasAccess) {
-        //     $stmt = exec_query(
-        //         '
-        //             SELECT COUNT(admin_id) as cnt FROM letsencrypt INNER JOIN admin USING(admin_id)
-        //             WHERE admin_id = ? AND admin_status = ?
-        //         ',
-        //         array($customerId, 'ok')
-        //     );
+            if ($cfg['ENABLE_SSL'] != 1) {
+                $hasAccess[$customerId] = false;
+            } else {
+                $stmt = exec_query(
+                    'SELECT COUNT(admin_id) AS cnt FROM admin WHERE admin_id = ? AND admin_status = ?',
+                    array($customerId, 'ok')
+                );
+                $row = $stmt->fetchRow(\PDO::FETCH_ASSOC);
+                $hasAccess[$customerId] = (bool)$row['cnt'];
+            }
+        }
 
-        //     $row = $stmt->fetchRow(PDO::FETCH_ASSOC);
-        //     $hasAccess = (bool)$row['cnt'];
-        // }
-
-        // return $hasAccess;
+        return $hasAccess[$customerId];
     }
 
     /**
