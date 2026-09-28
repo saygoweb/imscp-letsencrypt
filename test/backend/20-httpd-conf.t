@@ -2,6 +2,7 @@ use strict;
 use warnings;
 use FindBin;
 use lib "$FindBin::Bin/../lib";
+use File::Path qw/ make_path /;
 use Test::More;
 use SGWTest qw/ require_root load_plugin test_name cleanup_path cleanup_dir /;
 
@@ -48,7 +49,7 @@ is( $cfg, $tpl, 'and left as they were' );
 # A disabled domain must stop being renewed, or certbot renew fails on it every week.
 cleanup_dir( $_ ) for qw{ /etc/letsencrypt /etc/letsencrypt/renewal };
 my $renewal = cleanup_path( "/etc/letsencrypt/renewal/$domain.conf" );
-system( 'mkdir', '-p', '/etc/letsencrypt/renewal' );
+make_path( '/etc/letsencrypt/renewal' );
 open my $fh, '>', $renewal or die "cannot write $renewal: $!";
 print $fh "# test\n";
 close $fh;

@@ -2,6 +2,7 @@ use strict;
 use warnings;
 use FindBin;
 use lib "$FindBin::Bin/../lib";
+use File::Path qw/ make_path /;
 use Test::More;
 use SGWTest qw/
     require_root boot plugin shadow_tables create_letsencrypt_table fixture_domain fixture_letsencrypt
@@ -104,6 +105,9 @@ like( le_row( $failLe )->{'state'}, qr/NXDOMAIN/, 'a retried failure is reported
 
 # --- delete ----------------------------------------------------------------------
 
+# A host that has never run certbot has no /etc/letsencrypt at all; the
+# cleanup_dir calls above take away whatever this creates.
+make_path( '/etc/letsencrypt/renewal' );
 my $renewal = cleanup_path( "/etc/letsencrypt/renewal/$alsName.conf" );
 my $guiCert = cleanup_path( "$guiCerts/$alsName.pem" );
 for my $file ($renewal, $guiCert) {
