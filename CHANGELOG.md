@@ -1,5 +1,13 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 2.1.2
+
+* Fix the audit log line written when a customer edits a domain's LetsEncrypt settings:
+  it read `$data['domain_name_utf8']`, a key that was never set, so the log line lost the
+  domain name entirely (and PHP raised an undefined-index notice on every edit). It now logs
+  the vhost's real name, decoded to UTF-8 with `decode_idna()` the way the rest of the panel
+  logs a domain name.
+
 ## Version 2.1.1
 
 * Security fix: `letsencrypt_getOrCreateRow()` (used by the client edit page for every domain,
