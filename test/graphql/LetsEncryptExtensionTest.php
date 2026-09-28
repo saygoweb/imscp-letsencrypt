@@ -432,6 +432,28 @@ class LetsEncryptExtensionTest extends AuthzTestCase
     }
 
     /**
+     * SGW_LetsEncrypt::customerHasLetsEncrypt() used to hard-code
+     * "return true;" (TODO), so this scenario - the customer themselves is
+     * not entitled to the feature - could never actually happen; there was
+     * nothing for this test to catch. Now that the gate looks at the
+     * customer's own admin_status, a suspended (or not yet activated)
+     * customer is refused even though they own the vhost and would
+     * otherwise pass every earlier check.
+     */
+    public function testACustomerFailingTheGateGetsFeatureUnavailable(): void
+    {
+        exec_query(
+            'UPDATE admin SET admin_status = ? WHERE admin_id = ?', array('disabled', $this->fixture->customerId())
+        );
+
+        $result = $this->set(NodeType::DOMAIN, $this->fixture->domainId(), true, null, 'customer');
+
+        self::assertSame('FEATURE_UNAVAILABLE', $result['errors'][0]['extensions']['code'], json_encode($result));
+        self::assertSame('letsEncrypt', $result['errors'][0]['extensions']['feature']);
+        self::assertSame(0, $this->core->requests);
+    }
+
+    /**
      * The row for one virtual host, read directly - bypassing the API - so a
      * test can check exactly what the mutation wrote.
      */

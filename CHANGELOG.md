@@ -1,5 +1,21 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 2.1.3
+
+* Implement the customer-facing feature gate: `SGW_LetsEncrypt::customerHasLetsEncrypt()` used
+  to hard-code `return true;` (everyone had the feature). It now requires both that the panel's
+  SSL feature is switched on (`ENABLE_SSL`, the same setting `customerHasFeature('ssl')` tests)
+  and that the customer's own account is active (`admin_status = 'ok'`). Its per-request memo
+  was also a single value shared by every customer rather than one per customer; fixed alongside.
+* Re-enable the client navigation link, gated on the same check, which had been unconditionally
+  shown since 2017.
+* The client pages (`letsencrypt.php`, `letsencrypt_edit.php`, `letsencrypt_status.php`) already
+  refused a customer failing the gate; this had never actually been exercised until the gate
+  itself became real.
+* The GraphQL extension's write path, which already called this gate through
+  `Guard::requireFeature()`, now actually enforces it: a customer failing the gate gets
+  `FEATURE_UNAVAILABLE`.
+
 ## Version 2.1.2
 
 * Fix the audit log line written when a customer edits a domain's LetsEncrypt settings:
