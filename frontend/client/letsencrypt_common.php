@@ -191,10 +191,15 @@ function letsencrypt_isEnabled($status)
  *
  * @param string $kind 'dmn', 'als' or 'sub' - the panel's domain_type, minus 'alssub'
  * @param int $key The panel's id in that vhost's own table (domain_id, alias_id or subdomain_id)
- * @param int $ownerId admin_id to record if a row is inserted
+ * @param int $ownerId admin_id the vhost must belong to, and the admin_id to record if a row is
+ *                     inserted. A caller must always pass the id it has verified owns this vhost -
+ *                     $_SESSION['user_id'] on the client pages, or $vhost->getOwnerId() from the
+ *                     GraphQL extension's already-authorised target - never an id read back from
+ *                     the request unchecked.
  * @throws \Exception For an unsupported $kind
  * @return array|false ['letsencrypt_id', 'cert_name', 'http_forward', 'status', 'state'],
- *                      or false when $kind/$key names no such domain, alias or subdomain
+ *                      or false when $kind/$key names no such domain, alias or subdomain owned by
+ *                      $ownerId - indistinguishable from a $key that does not exist at all
  */
 function letsencrypt_getOrCreateRow($kind, $key, $ownerId)
 {
@@ -207,9 +212,9 @@ function letsencrypt_getOrCreateRow($kind, $key, $ownerId)
                     LEFT JOIN letsencrypt ON (
                         domain.domain_id=letsencrypt.domain_id
                     )
-                    WHERE domain.domain_id = ?
+                    WHERE domain.domain_id = ? AND domain_admin_id = ?
                 ',
-                array($key)
+                array($key, $ownerId)
             );
             break;
         case 'als':
@@ -221,9 +226,9 @@ function letsencrypt_getOrCreateRow($kind, $key, $ownerId)
                     LEFT JOIN letsencrypt ON (
                         domain_aliasses.alias_id=letsencrypt.alias_id
                     )
-                    WHERE domain_aliasses.alias_id = ?
+                    WHERE domain_aliasses.alias_id = ? AND domain_admin_id = ?
                 ',
-                array($key)
+                array($key, $ownerId)
             );
             break;
         case 'sub':
@@ -235,9 +240,9 @@ function letsencrypt_getOrCreateRow($kind, $key, $ownerId)
                     LEFT JOIN letsencrypt ON (
                         subdomain.subdomain_id=letsencrypt.subdomain_id
                     )
-                    WHERE subdomain.subdomain_id = ?
+                    WHERE subdomain.subdomain_id = ? AND domain_admin_id = ?
                 ',
-                array($key)
+                array($key, $ownerId)
             );
             break;
         default:

@@ -1,5 +1,16 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 2.1.1
+
+* Security fix: `letsencrypt_getOrCreateRow()` (used by the client edit page for every domain,
+  alias and subdomain lookup) never checked that the vhost it found actually belonged to the
+  customer asking for it, so any logged-in customer could view or edit another customer's
+  LetsEncrypt setting by changing the `id` in the URL. The lookup is now scoped to the owner id
+  the caller already trusts - `$_SESSION['user_id']` on the client pages, `$vhost->getOwnerId()`
+  from the GraphQL extension, which was not affected since it already authorised the vhost before
+  calling in. An id that belongs to someone else now behaves exactly like an id that does not
+  exist.
+
 ## Version 2.1.0
 
 * Add GraphQL support, through the SGW_GraphQL plugin's extension hook. See the README's
