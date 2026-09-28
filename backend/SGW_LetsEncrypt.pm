@@ -407,7 +407,7 @@ sub _lookup
     );
     # print( $command );
     # print( $stdout ) if $stdout;
-    return 1 if $stdout =~ /Host \w+ not found/m;
+    return 1 if $stdout =~ /Host \S+ not found/m;
     return 0 if $stdout =~ /is an alias for/m;
     return 0 if $stdout =~ /has address/m;
 
@@ -531,7 +531,8 @@ sub _updateSelfSignedCertificate
                 private_key_container_path     => $keyTempFile->filename,
                 certificate_container_path     => $certTempFile->filename
             );
-            return 0 if $openSSL->validateCertificateChain() == 0;
+            # The iMSCP::OpenSSL validators return TRUE on success
+            return 0 if $openSSL->validateCertificateChain();
         }
     }
 
@@ -545,8 +546,10 @@ sub _updateSelfSignedCertificate
     print($stdout . "\n") if $stdout;
     print($stderr . "\n") if $stderr;
 
-    my $key = $keyFile->get();
-    my $cert = $certFile->get();
+    # Read what openssl just wrote. The iMSCP::File objects above still hold the content they
+    # were given for the validation, and would hand that back instead.
+    my $key = iMSCP::File->new(filename => $keyTempFile->filename)->get();
+    my $cert = iMSCP::File->new(filename => $certTempFile->filename)->get();
 
     # Remember what is being replaced so that it can be put back should the certificate request
     # that follows fail, see _revertSelfSignedCertificate()
