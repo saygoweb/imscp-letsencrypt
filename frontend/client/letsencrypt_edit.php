@@ -130,7 +130,10 @@ function client_editLetsEncrypt()
     letsencrypt_applyChange($data['letsencrypt_id'], $enabled, $http_forward);
 
     send_request();
-    write_log(sprintf('%s updated properties of the %s domain', $_SESSION['user_logged'], $data['domain_name_utf8']), E_USER_NOTICE);
+    write_log(
+        sprintf('%s updated properties of the %s domain', $_SESSION['user_logged'], decode_idna($data['cert_name'])),
+        E_USER_NOTICE
+    );
     return true;
 }
 
