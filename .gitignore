@@ -3,3 +3,4 @@
 SGW_*.tgz
 SGW_*.zip
 log
+.claude/

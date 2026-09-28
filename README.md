@@ -59,6 +59,50 @@ why `package` builds the tgz. `package-zip` is kept for the odd occasion a zip i
 What is kept out of the release archive is listed in `upload-exclude.txt` for tar and
 `upload-exclude-zip.txt` for zip.
 
+## GraphQL
+
+When the [SGW_GraphQL](https://github.com/saygoweb/imscp-graphql) plugin is also installed, this
+plugin adds a `letsEncrypt` field to `Domain`, `Subdomain` and `DomainAlias`, and a
+`letsEncryptSet` mutation, through SGW_GraphQL's extension hook (see its
+`docs/EXTENSIONS.md`). Nothing changes when SGW_GraphQL is not installed: the plugin loads no
+GraphQL class unless that plugin is installed and dispatches `onGraphQLRegisterExtensions`.
+
+There is no column for an alias subdomain (`alssub`) in this plugin's own `letsencrypt` table, so
+`letsEncrypt` reads as `null` on one, and `letsEncryptSet` refuses one with `FEATURE_UNAVAILABLE`.
+
+```graphql
+query {
+  node(id: "RG9tYWluOjE") {
+    ... on Domain {
+      name
+      letsEncrypt {
+        enabled
+        httpForward
+        certName
+        provisioning { state settled message }
+      }
+    }
+  }
+}
+
+mutation {
+  letsEncryptSet(input: { id: "RG9tYWluOjE", enabled: true, httpForward: true }) {
+    name
+    ... on Domain { letsEncrypt { enabled provisioning { state } } }
+  }
+}
+```
+
+`letsEncrypt` is `null` until a certificate has been requested at least once. `enabled` reflects
+the last settled request - it is `false` while `provisioning.state` is `PENDING`, exactly as the
+client edit page shows the checkbox on a fresh visit. `provisioning.message` carries the certbot
+failure reason when `provisioning.state` is `ERROR`. `letsEncryptSet` refuses the request with
+`CONFLICT` when either the virtual host or this plugin's own row is still pending a previous
+change.
+
+Its tests live in `test/graphql/`, run with the SGW_GraphQL plugin's own PHPUnit rather than with
+`test/run.sh` - see [Testing](#testing).
+
 ## Testing
 
 The tests run against a real i-MSCP installation: the docker stack in the sibling
@@ -92,6 +136,24 @@ plugin to be installed. Everything they write to the database goes into
 `domain_aliasses` and `subdomain` for the test's own connection. certbot is replaced
 by `backend/certbot-auto-test.pm`, and the files it and the tests create are removed
 when each test ends.
+
+### GraphQL tests
+
+`test/graphql/` is run separately, with the [SGW_GraphQL](https://github.com/saygoweb/imscp-graphql)
+plugin's own PHPUnit rather than `test/run.sh`, since it needs that plugin's Composer
+dependencies and its `IntegrationTestCase`/`AuthzTestCase` bootstrap of the real panel and
+database:
+
+```
+php7.4 /var/www/imscp-plugins/imscp-graphql/vendor/bin/phpunit -c test/graphql/phpunit.xml --do-not-cache-result
+```
+
+run from this plugin's own checkout, on a box where both plugins sit side by side under
+`/var/www/imscp-plugins` - the shared development stack, or the CI image, where the
+`graphql-test` workflow job clones a shallow copy of SGW_GraphQL if it is not already there.
+Also safe on a shared server: it seeds and rolls back its own fixture, the same way SGW_GraphQL's
+own tests do, and only creates the `letsencrypt` table itself (via this plugin's own `sql/`
+migrations) when it is missing.
 
 ## How to Help
 

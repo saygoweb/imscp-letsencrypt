@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/9.6/phpunit.xsd"
+         bootstrap="bootstrap.php"
+         colors="true"
+         failOnWarning="true"
+         failOnRisky="true"
+         beStrictAboutOutputDuringTests="true">
+    <!--
+        Needs the panel bootstrapped (/var/www/imscp/gui/include/imscp-lib.php)
+        and a database, like SGW_GraphQL's own integration/authz suites. It is
+        skipped rather than failed off the box.
+    -->
+    <testsuites>
+        <testsuite name="graphql">
+            <directory>.</directory>
+        </testsuite>
+    </testsuites>
+</phpunit>
