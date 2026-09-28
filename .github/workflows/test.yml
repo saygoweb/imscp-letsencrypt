@@ -1,0 +1,29 @@
+name: Test
+
+# Runs the tests on an installed i-MSCP server, booted from the CI image that
+# saygoweb/imscp publishes; see that repository's
+# .github/workflows/plugin-test.yml. Locally, the same run is
+#
+#   ../imscp/docker/ci/plugin-test.sh --no-install .. imscp-letsencrypt -- 'sh test/run.sh'
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  test:
+    uses: saygoweb/imscp/.github/workflows/plugin-test.yml@main
+    with:
+      # test/run.sh needs no installed plugin: it writes to temporary tables
+      # and uses a mock certbot. SGW_DESTRUCTIVE_TESTS is left off: its
+      # 95-install.t installs certbot through snap, and snapd cannot run in a
+      # docker container.
+      install: false
+      test: sh test/run.sh
