@@ -20,12 +20,12 @@
 
 namespace SGW_LetsEncrypt;
 
-use iMSCP\Database\DatabaseMySQL;
 use iMSCP\Event\EventAggregator;
 use iMSCP\Event\Events;
 use iMSCP\Plugin\SGW_LetsEncrypt\SGW_LetsEncrypt;
 use iMSCP\TemplateEngine;
-use PDO;
+
+require_once __DIR__ . '/letsencrypt_common.php';
 
 /***********************************************************************************************************************
  * Functions
@@ -33,6 +33,13 @@ use PDO;
 
 /**
  * Get letsencrypt data
+ *
+ * A thin translation of this page's own vocabulary ('domain', 'alias',
+ * 'subdomain') onto the panel's (dmn/als/sub), memoised for the request:
+ * this is called once by letsencrypt_edit_generatePage() and, on a POST,
+ * once more by client_editLetsEncrypt() first. The actual lookup-or-insert
+ * rule lives in letsencrypt_getOrCreateRow(), shared with the GraphQL
+ * extension.
  *
  * @access private
  * @param string $type type of record identifier 'domain', 'subdomain', or 'alias'
@@ -47,116 +54,13 @@ function _client_getEditData($type, $id)
         return $data;
     }
 
-    switch ($type) {
-        case 'domain':
-            $stmt = exec_query(
-                '
-                    SELECT domain.domain_id AS domain_id, domain_name, domain_admin_id, letsencrypt_id, cert_name, http_forward, status, state
-                    FROM domain
-                    LEFT JOIN letsencrypt ON (
-                        domain.domain_id=letsencrypt.domain_id
-                    )
-                    WHERE domain.domain_id = ?
-                ',
-                array($id)
-            );
-            break;
-        case 'alias':
-    //     '
-    //     SELECT domain_aliasses.alias_id AS alias_id, alias_name, domain_admin_id, http_forward, status, state
-    //     FROM domain
-    //     INNER JOIN domain_aliasses ON (domain.domain_id = domain_aliasses.domain_id)
-    //     LEFT JOIN letsencrypt ON (
-    //         domain_aliasses.alias_id=letsencrypt.alias_id
-    //     )
-    //     WHERE domain_admin_id = ?
-    // ',
-    // array($_SESSION['user_id'])
-            $stmt = exec_query(
-                '
-                    SELECT domain_aliasses.alias_id AS alias_id, alias_name, domain_admin_id, letsencrypt_id, cert_name, http_forward, status, state
-                    FROM domain
-                    INNER JOIN domain_aliasses ON (domain.domain_id = domain_aliasses.domain_id)
-                    LEFT JOIN letsencrypt ON (
-                        domain_aliasses.alias_id=letsencrypt.alias_id
-                    )
-                    WHERE domain_aliasses.alias_id = ?
-                ',
-                array($id)
-            );
-            break;
-        case 'subdomain':
-    //     '
-    //     SELECT subdomain.subdomain_id AS subdomain_id, subdomain_name, domain_name, domain_admin_id, http_forward, status, state
-    //     FROM domain
-    //     INNER JOIN subdomain ON (domain.domain_id = subdomain.domain_id)
-    //     LEFT JOIN letsencrypt ON (
-    //         subdomain.subdomain_id=letsencrypt.subdomain_id
-    //     )
-    //     WHERE domain_admin_id = ?
-    // ',
-            $stmt = exec_query(
-                '
-                    SELECT subdomain.subdomain_id AS subdomain_id, domain_name, subdomain_name, domain_admin_id, letsencrypt_id, cert_name, http_forward, status, state
-                    FROM domain
-                    INNER JOIN subdomain ON (domain.domain_id = subdomain.domain_id)
-                    LEFT JOIN letsencrypt ON (
-                        subdomain.subdomain_id=letsencrypt.subdomain_id
-                    )
-                    WHERE subdomain.subdomain_id = ?
-                ',
-                array($id)
-            );
-            break;
-        default:
-            return false;
-    }
+    $kinds = array('domain' => 'dmn', 'alias' => 'als', 'subdomain' => 'sub');
 
-    if (!$stmt->rowCount()) {
+    if (!isset($kinds[$type])) {
         return false;
     }
 
-    $data = $stmt->fetchRow(PDO::FETCH_ASSOC);
-    if ($data['letsencrypt_id'] == null) {
-        $db = DatabaseMySQL::getInstance();
-
-        $domain_id = 0;
-        $alias_id = null;
-        $subdomain_id = null;
-        switch ($type) {
-            case 'domain':
-                $certname = $data['domain_name'];
-                $domain_id = $id;
-                break;
-            case 'alias':
-                $certname = $data['alias_name'];
-                $alias_id = $id;
-                break;
-            case 'subdomain':
-                $certname = $data['subdomain_name'] . '.' . $data['domain_name'];
-                $subdomain_id = $id;
-                break;
-            default:
-                throw new \Exception("Unsupported LetsEncrypt type '$type'");
-        }
-
-        // Set default values
-        $data['cert_name'] = $certname;
-        $data['http_forward'] = 0;
-        $data['status'] = 'disabled';
-        $data['state'] = '';
-        exec_query(
-            '
-                INSERT INTO letsencrypt (
-                    admin_id, domain_id, alias_id, subdomain_id, cert_name, http_forward, status, state
-                ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?
-                )
-            ',
-            array($_SESSION['user_id'], $domain_id, $alias_id, $subdomain_id, $data['cert_name'], $data['http_forward'], $data['status'], $data['state'])
-        );
-        $data['letsencrypt_id'] = $db->insertId();
-    }
+    $data = letsencrypt_getOrCreateRow($kinds[$type], $id, intval($_SESSION['user_id']));
 
     return $data;
 }
@@ -220,18 +124,10 @@ function client_editLetsEncrypt()
         showBadRequestErrorPage();
     }
 
-    $status = $_POST['enabled'] == 'yes' ? 'toadd' : 'todelete';
-    $http_forward = $_POST['http_forward'] == 'yes' ? 1 : 0;
+    $enabled = $_POST['enabled'] == 'yes';
+    $http_forward = $_POST['http_forward'] == 'yes';
 
-    // Clear any error recorded by a previous request, it no longer describes the domain
-    exec_query(
-        '
-            UPDATE letsencrypt
-            SET http_forward = ?, status = ?, state = \'\'
-            WHERE letsencrypt_id = ?
-        ',
-        array($http_forward, $status, $data['letsencrypt_id'])
-    );
+    letsencrypt_applyChange($data['letsencrypt_id'], $enabled, $http_forward);
 
     send_request();
     write_log(sprintf('%s updated properties of the %s domain', $_SESSION['user_logged'], $data['domain_name_utf8']), E_USER_NOTICE);

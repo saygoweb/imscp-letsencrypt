@@ -56,10 +56,28 @@ class SGW_LetsEncrypt extends AbstractPlugin
                 Events::onResellerScriptStart, // Don't think we need this except to enable it at all maybe CP 2017-06
                 Events::onClientScriptStart,
                 Events::onAfterDeleteDomainAlias, // Cleanup LetsEncrypt for the domain alias
-                Events::onAfterDeleteCustomer     // Cleanup LetsEncrypt for this domain / customer
+                Events::onAfterDeleteCustomer,    // Cleanup LetsEncrypt for this domain / customer
+                // A string literal, not ExtensionRegistry::EVENT: this plugin must not load an
+                // SGW_GraphQL class - or even know the constant exists - unless that plugin is
+                // installed and actually dispatches it.
+                'onGraphQLRegisterExtensions'
             ),
             $this
         );
+    }
+
+    /**
+     * onGraphQLRegisterExtensions event listener
+     *
+     * Only ever called when SGW_GraphQL is installed and serving a request, so this is the only
+     * place this plugin touches a GraphQL class.
+     *
+     * @param Event $event
+     * @return void
+     */
+    public function onGraphQLRegisterExtensions(Event $event)
+    {
+        $event->getParam('registry')->register(new GraphQL\LetsEncryptExtension());
     }
 
     /**

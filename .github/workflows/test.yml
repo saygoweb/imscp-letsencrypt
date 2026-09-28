@@ -2,9 +2,12 @@ name: Test
 
 # Runs the tests on an installed i-MSCP server, booted from the CI image that
 # saygoweb/imscp publishes; see that repository's
-# .github/workflows/plugin-test.yml. Locally, the same run is
+# .github/workflows/plugin-test.yml. Locally, the same runs are
 #
 #   ../imscp/docker/ci/plugin-test.sh --no-install .. imscp-letsencrypt -- 'sh test/run.sh'
+#   ../imscp/docker/ci/plugin-test.sh --setup '<the graphql setup below>' \
+#       --no-install .. imscp-letsencrypt -- \
+#       'php7.4 /var/www/imscp-plugins/imscp-graphql/vendor/bin/phpunit -c test/graphql/phpunit.xml --do-not-cache-result'
 
 on:
   pull_request:
@@ -27,3 +30,28 @@ jobs:
       # docker container.
       install: false
       test: sh test/run.sh
+
+  graphql-test:
+    uses: saygoweb/imscp/.github/workflows/plugin-test.yml@main
+    with:
+      # test/graphql runs against the SGW_GraphQL plugin's own PHPUnit, which
+      # needs its Composer dependencies. Cloning it here (public repository,
+      # a shallow checkout) rather than checking it out as a second job step:
+      # plugin-test.yml only mounts this plugin's own checkout into the CI
+      # container, so the sibling plugin has to arrive inside it, and this
+      # is the same setup the graphql plugin's own CI uses for itself. The
+      # guard makes it a no-op on the shared development box, where the
+      # sibling checkout - and its already-installed vendor/ - already sits
+      # next to this one; composer install must never run into a checkout
+      # this job did not create.
+      setup: >-
+        [ -f /var/www/imscp-plugins/imscp-graphql/vendor/autoload.php ] || {
+        git clone --depth 1 https://github.com/saygoweb/imscp-graphql.git /var/www/imscp-plugins/imscp-graphql &&
+        cd /var/www/imscp-plugins/imscp-graphql &&
+        php7.4 /var/www/imscp/gui/bin/composer.phar install --no-interaction --no-progress; }
+      # No plugin install/activation needed: the test registers this
+      # plugin's extension directly, the way SGW_GraphQL's own
+      # ExtensionContextTest does, rather than going through a dispatched
+      # event.
+      install: false
+      test: php7.4 /var/www/imscp-plugins/imscp-graphql/vendor/bin/phpunit -c test/graphql/phpunit.xml --do-not-cache-result

@@ -1,5 +1,15 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 2.1.0
+
+* Add GraphQL support, through the SGW_GraphQL plugin's extension hook. See the README's
+  GraphQL section. A `letsEncrypt` field on `Domain`, `Subdomain` and `DomainAlias`, and a
+  `letsEncryptSet` mutation; only active when SGW_GraphQL is installed, and only ever loaded then.
+* The client edit page's read-or-create and write logic is now shared with the GraphQL
+  extension, in two new functions in `letsencrypt_common.php`:
+  `letsencrypt_getOrCreateRow()` and `letsencrypt_applyChange()`. No change to the page's own
+  behaviour.
+
 ## Version 2.0.3
 
 * The LetsEncrypt page now updates the status, note and forward columns of a domain by itself while
