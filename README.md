@@ -1,5 +1,8 @@
 # i-MSCP LetsEncrypt Plugin
 
+[![Test](https://github.com/saygoweb/imscp-letsencrypt/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/saygoweb/imscp-letsencrypt/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/saygoweb/imscp-letsencrypt/branch/master/graph/badge.svg)](https://codecov.io/gh/saygoweb/imscp-letsencrypt)
+
 Plugin that provides domains with LetsEncrypt SSL certificates.
 
 See [Changelog](CHANGELOG.md) for a detailed description of what has changed in each version.

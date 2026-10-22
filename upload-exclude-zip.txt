@@ -19,3 +19,5 @@ makefile.json
 upload-exclude.txt
 upload-exclude-zip.txt
 phpunit.xml
+coverage/*
+codecov.yml

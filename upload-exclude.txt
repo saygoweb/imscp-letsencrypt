@@ -16,3 +16,5 @@ gulpfile.js
 makefile.json
 upload-exclude.txt
 upload-exclude-zip.txt
+coverage
+codecov.yml
