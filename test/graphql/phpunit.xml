@@ -16,4 +16,15 @@
             <directory>.</directory>
         </testsuite>
     </testsuites>
+    <!--
+        What a coverage run (the GraphQL job in .github/workflows/test.yml)
+        measures: the plugin's own PHP source, not its tests or tooling.
+    -->
+    <coverage>
+        <include>
+            <directory suffix=".php">../../GraphQL</directory>
+            <directory suffix=".php">../../frontend</directory>
+            <file>../../SGW_LetsEncrypt.php</file>
+        </include>
+    </coverage>
 </phpunit>

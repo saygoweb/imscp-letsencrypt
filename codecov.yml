@@ -1,0 +1,9 @@
+coverage:
+  status:
+    # Report coverage, but do not fail a pull request over it.
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
