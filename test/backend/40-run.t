@@ -129,6 +129,29 @@ is( row( 'SELECT alias_status FROM domain_aliasses WHERE alias_id = ?', $alsId )
     'the alias is queued for a rebuild without SSL' );
 ok( cert_row( 'dmn', $dmnId ), "another domain's certificate is untouched" );
 
+# --- deleting the host itself ----------------------------------------------------
+
+# When i-MSCP deletes or disables a host it marks the host and its letsencrypt row
+# together. Deleting the certificate must not turn that pending status back into a
+# rebuild, or the host is rebuilt instead of deleted (#51).
+for my $type (qw/ dmn als sub /) {
+    my ($table, $col, $key) = @{ {
+        dmn => [ 'domain', 'domain_status', 'domain_id' ],
+        als => [ 'domain_aliasses', 'alias_status', 'alias_id' ],
+        sub => [ 'subdomain', 'subdomain_status', 'subdomain_id' ],
+    }->{$type} };
+    for my $pending (qw/ todelete todisable /) {
+        my ($id, $leId) = queue( $type, "gone-$type-$pending", status => 'ok' );
+        $dbh->do( "UPDATE $table SET $col = ? WHERE $key = ?", undef, $pending, $id );
+        $dbh->do( "UPDATE letsencrypt SET status = 'todelete' WHERE letsencrypt_id = ?", undef, $leId );
+
+        is( $plugin->run(), 0, "deleting the certificate of a $type marked $pending runs" );
+        ok( !le_row( $leId ), "the $type letsencrypt row is gone" );
+        is( row( "SELECT $col FROM $table WHERE $key = ?", $id )->{$col}, $pending,
+            "the $type is still $pending" );
+    }
+}
+
 # --- nothing to do ---------------------------------------------------------------
 
 my @before = rows( 'SELECT * FROM letsencrypt ORDER BY letsencrypt_id' );

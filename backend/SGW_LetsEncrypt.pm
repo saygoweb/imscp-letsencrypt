@@ -970,30 +970,25 @@ sub _triggerDomainOnChange
 {
     my ($self, $type, $id) = @_;
 
-    # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
-    my $rs;
-    if ($type eq 'dmn') {
-        $rs = $self->{'db'}->doQuery(
-            'u',
-            "UPDATE domain SET domain_status = 'toadd' WHERE domain_id = ? ",
-            $id
-        );
-    } elsif ($type eq 'als') {
-        $rs = $self->{'db'}->doQuery(
-            'u',
-            "UPDATE domain_aliasses SET alias_status = 'toadd' WHERE alias_id = ? ",
-            $id
-        );
-    } elsif ($type eq 'sub') {
-        $rs = $self->{'db'}->doQuery(
-            'u',
-            "UPDATE subdomain SET subdomain_status = 'toadd' WHERE subdomain_id = ? ",
-            $id
-        );
-    } else {
+    my %host = (
+        dmn => [ 'domain', 'domain_status', 'domain_id' ],
+        als => [ 'domain_aliasses', 'alias_status', 'alias_id' ],
+        sub => [ 'subdomain', 'subdomain_status', 'subdomain_id' ]
+    );
+    unless ($host{$type}) {
         $self->_error( 'Unsupported domain type ' . $type );
         return 2;
     }
+    my ($table, $column, $key) = @{$host{$type}};
+
+    # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
+    # A host already queued for deletion or disabling is left as it is: i-MSCP rewrites or removes its vhost anyway,
+    # and turning that pending status into 'toadd' would rebuild the host instead of deleting it (#51).
+    my $rs = $self->{'db'}->doQuery(
+        'u',
+        "UPDATE $table SET $column = 'toadd' WHERE $key = ? AND $column NOT IN ('todelete', 'todisable')",
+        $id
+    );
     unless (ref $rs eq 'HASH') {
         return $self->_error( $rs );
     }
