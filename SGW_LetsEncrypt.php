@@ -53,7 +53,6 @@ class SGW_LetsEncrypt extends AbstractPlugin
         // TODO Also sub domains? CP 2017-06
         $eventsManager->registerListener(
             array(
-                Events::onResellerScriptStart, // Don't think we need this except to enable it at all maybe CP 2017-06
                 Events::onClientScriptStart,
                 Events::onAfterDeleteDomainAlias, // Cleanup LetsEncrypt for the domain alias
                 Events::onAfterDeleteCustomer,    // Cleanup LetsEncrypt for this domain / customer
@@ -134,16 +133,6 @@ class SGW_LetsEncrypt extends AbstractPlugin
     }
 
     /**
-     * onResellerScriptStart event listener
-     *
-     * @return void
-     */
-    public function onResellerScriptStart()
-    {
-        $this->setupNavigation('reseller');
-    }
-
-    /**
      * onClientScriptStart event listener
      *
      * @return void
@@ -151,7 +140,7 @@ class SGW_LetsEncrypt extends AbstractPlugin
     public function onClientScriptStart()
     {
         if (self::customerHasLetsEncrypt($_SESSION['user_id'])) {
-            $this->setupNavigation('client');
+            $this->setupNavigation();
         }
     }
 
@@ -191,7 +180,6 @@ class SGW_LetsEncrypt extends AbstractPlugin
     {
         $pluginDir = $this->getPluginManager()->pluginGetRootDir() . '/' . $this->getName();
         return array(
-            '/reseller/letsencrypt.php'    => $pluginDir . '/frontend/reseller/letsencrypt.php',
             '/client/letsencrypt.php'      => $pluginDir . '/frontend/client/letsencrypt.php',
             '/client/letsencrypt_edit.php' => $pluginDir . '/frontend/client/letsencrypt_edit.php',
             // Polled by the LetsEncrypt page while the backend still has certificates to request
@@ -300,43 +288,30 @@ class SGW_LetsEncrypt extends AbstractPlugin
     }
 
     /**
-     * Inject LetsEncrypt links into the navigation object
-     *
-     * @param string $level UI level
+     * Inject the LetsEncrypt links into the client navigation object
      */
-    protected function setupNavigation($level)
+    protected function setupNavigation()
     {
-        if (Registry::isRegistered('navigation')) {
-            /** @var Zend_Navigation $navigation */
-            $navigation = Registry::get('navigation');
+        if (!Registry::isRegistered('navigation')) {
+            return;
+        }
 
-            if ($level == 'reseller') {
-                if (($page = $navigation->findOneBy('uri', '/reseller/users.php'))) {
-                    $page->addPage(array(
-                        'label'              => tr('LetsEncrypt'),
-                        'uri'                => '/reseller/letsencrypt.php',
-                        'title_class'        => 'users',
-                        'privilege_callback' => array(
-                            'name' => 'resellerHasCustomers'
-                        )
-                    ));
-                }
-            } elseif ($level == 'client') {
-                if (($page = $navigation->findOneBy('uri', '/client/domains_manage.php'))) {
-                    $page->addPage(array(
-                        'label'       => tr('LetsEncrypt'),
-                        'uri'         => '/client/letsencrypt.php',
-                        'title_class' => 'domains',
-                        'pages'       => array(
-                            'letsencrypt_edit' => array(
-                                'label'       => tr('LetsEncrypt Edit'),
-                                'uri'         => '/client/letsencrypt_edit.php',
-                                'title_class' => ''
-                            )
-                        )
-                    ));
-                }
-            }
+        /** @var Zend_Navigation $navigation */
+        $navigation = Registry::get('navigation');
+
+        if (($page = $navigation->findOneBy('uri', '/client/domains_manage.php'))) {
+            $page->addPage(array(
+                'label'       => tr('LetsEncrypt'),
+                'uri'         => '/client/letsencrypt.php',
+                'title_class' => 'domains',
+                'pages'       => array(
+                    'letsencrypt_edit' => array(
+                        'label'       => tr('LetsEncrypt Edit'),
+                        'uri'         => '/client/letsencrypt_edit.php',
+                        'title_class' => ''
+                    )
+                )
+            ));
         }
     }
 
