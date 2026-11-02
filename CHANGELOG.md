@@ -12,11 +12,22 @@
   later failed or created an unused `<name>-0001` lineage while the site went on serving the old,
   never-renewed certificate. Deleting now runs `certbot delete` and removes whatever `live/`,
   `archive/` and renewal config it leaves.
-* certbot is now always given `--cert-name`, so a certificate lands in the lineage the vhost uses.
-* Lineages already orphaned by earlier versions (no renewal config, or an empty one) are moved to
-  `/etc/letsencrypt/orphaned/<name>-<time>/` before a new certificate is requested, and put back if
-  the request fails. Existing `<name>-NNNN` duplicates are left alone and can be removed with
-  `certbot delete --cert-name <name>-NNNN`.
+* certbot is now always given `--cert-name`, so a certificate lands in the lineage the vhost uses. If
+  certbot still saves it as `<name>-NNNN`, the request is reported as failed, naming the duplicate.
+  The `www` name is only left off when it does not exist; when the lookup is inconclusive it is kept
+  if the certificate in use has it, rather than reissuing the certificate without it.
+* Lineages already orphaned by earlier versions (no renewal config, or one certbot cannot load) are
+  handed back to certbot: when `live/<name>` links into `archive/<name>` as certbot lays it out, a
+  renewal config is written for it, with the account and server of another lineage, and certbot keeps
+  or renews the certificate in place. The site keeps its certificate throughout, which matters because
+  `certbot --apache` refuses to run while a vhost names a missing file. A lineage that cannot be
+  adopted is moved to `/etc/letsencrypt/orphaned/<name>-<time>/` before a new certificate is
+  requested, and put back if the request fails. Existing `<name>-NNNN` duplicates are left alone and
+  can be removed with `certbot delete --cert-name <name>-NNNN`.
+* A certificate request for a domain that is still disabled now fails with a message saying so,
+  instead of restoring its renewals and rebuilding (re-enabling) the domain.
+* Deleting a certificate removes its files only after the domain has been queued for its rebuild
+  without SSL; if queueing fails, the files are kept and the delete is reported as failed.
 
 ## Version 2.1.3
 

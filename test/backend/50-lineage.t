@@ -2,6 +2,7 @@ use strict;
 use warnings;
 use FindBin;
 use lib "$FindBin::Bin/../lib";
+use File::Temp;
 use Test::More;
 use SGWTest qw/
     require_root boot plugin shadow_tables create_letsencrypt_table fixture_domain fixture_letsencrypt
@@ -152,30 +153,139 @@ ok( !-e "$LE/$_", "$_ goes" ) for "live/$name", "archive/$name";
 
 # --- a lineage an earlier plugin left orphaned -----------------------------------
 # Up to 2.1.4 disabling or deleting removed only the renewal config, and a failed
-# certbot 5.9 run leaves an empty one. Servers have such lineages today.
+# certbot 5.9 run leaves an empty one. Servers have such lineages today, mostly
+# for sites that are up and serving the certificate from live/<name>: certbot
+# --apache runs apache2ctl configtest first, so live/<name> must stay where it is.
 
-for my $case ([ 'orphan', 'no renewal config' ], [ 'emptyconf', 'an empty renewal config' ]) {
-    my ($label, $what) = @{$case};
+my $vhosts = File::Temp->newdir();
+local $ENV{'CERTBOT_MOCK_APACHE_CONF_DIR'} = $vhosts->dirname;
+
+# The site's SSL vhost, as the listener rewrites it
+sub vhost
+{
+    my ($name) = @_;
+    my $conf = "$vhosts/${name}_ssl.conf";
+    open my $fh, '>', $conf or die "cannot write $conf: $!";
+    print $fh (
+        "<VirtualHost *:443>\n",
+        "    SSLEngine On\n",
+        "    SSLCertificateFile $LE/live/$name/cert.pem\n",
+        "    SSLCertificateKeyFile $LE/live/$name/privkey.pem\n",
+        "    SSLCertificateChainFile $LE/live/$name/chain.pem\n",
+        "</VirtualHost>\n"
+    );
+    close $fh;
+    $conf;
+}
+
+# Another lineage certbot does know, whose account the rebuilt config is to use
+my $sibling = "$LE/renewal/sibling-$$.sgw-le.test.conf";
+open my $sfh, '>', $sibling or die "cannot write $sibling: $!";
+print $sfh "cert = /etc/hostname\n\n[renewalparams]\naccount = mockaccount$$\nauthenticator = apache\n"
+    . "server = https://acme-staging-v02.api.letsencrypt.org/directory\n";
+close $sfh;
+
+for my $case (
+    [ 'orphan', 'no renewal config', undef ],
+    [ 'emptyconf', 'an empty renewal config', '' ],
+    [ 'junkconf', 'a renewal config certbot cannot load', "# junk\n" ]
+) {
+    my ($label, $what, $content) = @{$case};
     ($id, $le, $name) = queue( $label );
     $plugin->run();
     my $old = slurp( "$LE/live/$name/cert.pem" );
-    if ($label eq 'orphan') {
-        unlink "$LE/renewal/$name.conf";
-    } else {
+    unlink "$LE/renewal/$name.conf";
+    if (defined $content) {
         open my $fh, '>', "$LE/renewal/$name.conf" or die $!;
+        print $fh $content;
         close $fh;
     }
+    my $site = vhost( $name );
     requeue( $le, 'tochange' );
 
-    is( $plugin->run(), 0, "a lineage with $what is requested again" );
-    issued( $le, 'and issued' );
-    is_deeply( [ lineages( $name ) ], [ $name ], 'into the lineage the vhost points at' );
-    ok( has_config( "$LE/renewal/$name.conf" ), 'which certbot renews' );
-    isnt( slurp( "$LE/live/$name/cert.pem" ), $old, 'with a new certificate' );
-    my @aside = glob "$LE/orphaned/$name-*";
-    is( scalar @aside, 1, 'the orphaned lineage is kept aside' );
-    is( slurp( "$aside[0]/live/$name/cert.pem" ), $old, 'with its certificate still readable' );
+    is( $plugin->run(), 0, "the certificate of a site with $what is requested again" );
+    issued( $le, 'and succeeds' );
+    is( slurp( "$LE/live/$name/cert.pem" ), $old, 'keeping the certificate the site serves' );
+    is_deeply( [ lineages( $name ) ], [ $name ], 'in its one lineage' );
+    my $conf = slurp( "$LE/renewal/$name.conf" ) // '';
+    like( $conf, qr{^cert = \Q$LE/live/$name/cert.pem\E$}m, 'which certbot renews again' );
+    like( $conf, qr{^archive_dir = \Q$LE/archive/$name\E$}m, 'from its archive' );
+    my $account = "mockaccount$$";
+    like( $conf, qr{^account = \Q$account\E$}m, 'with the account the other lineages use' );
+    like( $conf, qr{^server = https://acme-staging-v02\.api\.letsencrypt\.org/directory$}m, 'and their server' );
+    like( $conf, qr{^authenticator = apache$}m, 'through apache' );
+    like( $conf, qr{^key_type = rsa$}m, 'for the key it has' );
+    is( scalar( () = glob "$LE/orphaned/$name-*" ), 0, 'with nothing moved aside' );
+    unlink $site;
 }
+unlink $sibling;
+
+# A lineage whose live/ is not certbot's - plain files, not links into archive/ -
+# cannot be adopted. With no site using it, it is moved aside for a new one.
+($id, $le, $name) = queue( 'unadoptable' );
+$plugin->run();
+unlink "$LE/renewal/$name.conf";
+for my $file (qw/ privkey cert chain fullchain /) {
+    my $link = "$LE/live/$name/$file.pem";
+    my $content = slurp( $link );
+    unlink $link;
+    open my $fh, '>', $link or die $!;
+    print $fh $content;
+    close $fh;
+}
+my $old = slurp( "$LE/live/$name/cert.pem" );
+requeue( $le, 'tochange' );
+is( $plugin->run(), 0, 'a lineage that cannot be adopted is requested again' );
+issued( $le, 'and issued' );
+is_deeply( [ lineages( $name ) ], [ $name ], 'into the lineage the vhost points at' );
+ok( has_config( "$LE/renewal/$name.conf" ), 'which certbot renews' );
+isnt( slurp( "$LE/live/$name/cert.pem" ), $old, 'with a new certificate' );
+my @aside = glob "$LE/orphaned/$name-*";
+is( scalar @aside, 1, 'the old lineage is kept aside' );
+is( slurp( "$aside[0]/live/$name/cert.pem" ), $old, 'with its certificate still readable' );
+
+# --- certbot saving the certificate somewhere else is a failure ------------------
+# Should certbot reject a renewal config the plugin found fine, it saves the
+# certificate as an unused <name>-0001 while the vhost keeps serving the old one.
+
+($id, $le, $name) = queue( 'elsewhere' );
+$plugin->run();
+requeue( $le, 'tochange' );
+{
+    local $ENV{'CERTBOT_MOCK_NEW_LINEAGE'} = 1;
+    is( $plugin->run(), 0, 'a request certbot saves under another name runs' );
+}
+my $elsewhere = le_row( $le );
+is( $elsewhere->{'status'}, 'error', 'and is reported as failed' );
+like( $elsewhere->{'state'}, qr/\Q$name\E-0001/, 'naming where certbot put it' );
+
+# --- a request for a domain that is still disabled -------------------------------
+# Disabling stops renewals, and nothing must start them again, or bring the site
+# back, until the domain is enabled.
+
+($id, $le, $name) = queue( 'stilldisabled' );
+$plugin->run();
+build( 'domain_disabled.tpl', $name );
+my $dbh = iMSCP::Database->factory()->getRawDb();
+$dbh->do( "UPDATE domain SET domain_status = 'disabled' WHERE domain_id = ?", undef, $id );
+requeue( $le, 'tochange' );
+is( $plugin->run(), 0, 'a request for a disabled domain runs' );
+ok( !-e "$LE/renewal/$name.conf", 'certbot still does not renew it' );
+ok( -f "$LE/renewal-disabled/$name.conf", 'its renewal config stays aside' );
+is( row( 'SELECT domain_status FROM domain WHERE domain_id = ?', $id )->{'domain_status'}, 'disabled',
+    'and the domain stays disabled' );
+isnt( le_row( $le )->{'status'}, 'tochange', 'the request is not left queued' );
+
+# --- a delete that cannot rebuild the domain keeps the lineage --------------------
+# The vhost points at live/<name> until the domain is rebuilt without SSL; with
+# no rebuild coming, removing the files would leave httpd a vhost it cannot load.
+
+$name = test_name( 'norebuild' );
+system( $plugin->{'certbotTest'}, 'certonly', '--cert-name', $name, '-d', $name ) == 0 or die 'mock certbot failed';
+$le = fixture_letsencrypt( type => 'dmn', id => 0, cert_name => $name, status => 'todelete' );
+is( $plugin->run(), 0, 'a delete for a domain that cannot be rebuilt runs' );
+is( le_row( $le )->{'status'}, 'error', 'and fails' );
+ok( -f "$LE/live/$name/cert.pem", 'leaving the certificate the vhost uses' );
 
 # --- a failed request puts an orphaned lineage back --------------------------------
 

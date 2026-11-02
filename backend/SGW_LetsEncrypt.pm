@@ -440,6 +440,12 @@ sub _addCertificate
 
     debug("_addCertificate ");
 
+    # A disabled domain keeps its lineage, renewals parked until it is enabled again. Requesting the
+    # certificate now would restore them, and rebuilding the domain afterwards would re-enable the site.
+    if (($self->_domainStatus( $type, $id ) // '') eq 'disabled') {
+        return $self->_error( "$certName is disabled: request its certificate again once it is enabled" );
+    }
+
     if (!$self->{'testmode'} && _lookup($certName) != 0) {
         return $self->_error( "Cannot resolve $certName" );
     }
@@ -448,7 +454,10 @@ sub _addCertificate
     my $rs = $self->_restoreRenewalConf( $certName );
     return $rs if $rs;
 
-    # Files certbot has no renewal config for would stop it saving the certificate under $certName
+    # A lineage certbot has no usable renewal config for would stop it saving the certificate under
+    # $certName: hand it back to certbot if it can be, otherwise move it out of the way
+    $rs = $self->_adoptOrphanedLineage( $certName );
+    return $rs if $rs;
     ($rs, my $orphaned) = $self->_moveOrphanedLineage( $certName );
     return $rs if $rs;
 
@@ -459,7 +468,11 @@ sub _addCertificate
         return $rs;
     }
 
-    my $haveWWW = !$self->{'testmode'} && (_lookup('www.' . $certName) == 0) ? 1 : 0;
+    my $haveWWW = $self->{'testmode'} ? 0 : $self->_wantWWW(
+        _lookup( "www.$certName" ), $self->_lineagePaths( $certName )->{'live'} . '/cert.pem', "www.$certName"
+    );
+
+    my %otherLineages = map { $_ => 1 } $self->_otherLineages( $certName );
 
     # Call certbot to create the key and certificate under /etc/letsencrypt
     my ($stdout, $stderr);
@@ -472,8 +485,17 @@ sub _addCertificate
     debug( $stdout ) if $stdout;
     # certbot exits non-zero for conditions that are none of our business to recover from, such as a
     # domain that does not resolve yet. Report those against the domain rather than failing the run.
-    if ($rs) {
-        my $message = _certbotError( $certName, $rs, $stdout, $stderr );
+    # Saving the certificate in a lineage of its own choosing is a failure too: the vhost uses
+    # live/$certName, which still holds the old certificate.
+    my ($elsewhere) = grep { !$otherLineages{$_} } $self->_otherLineages( $certName );
+    if ($rs || defined $elsewhere) {
+        my $message = $rs
+            ? _certbotError( $certName, $rs, $stdout, $stderr )
+            : sprintf(
+                'certbot saved the certificate of %s as %s, not in the lineage the site uses. '
+                    . 'Remove it with certbot delete --cert-name %s, check renewal/%s.conf, and request again.',
+                $certName, $elsewhere, $elsewhere, $certName
+            );
         # No certificate was issued, so take back the placeholder that was put in place for it.
         # Left behind it would give the domain SSL support backed by /etc/letsencrypt files that
         # do not exist, and the next rebuild of the domain would produce a vhost httpd cannot load.
@@ -640,6 +662,27 @@ sub _revertSelfSignedCertificate
     0;
 }
 
+=item _domainStatus($type, $id)
+
+ Return the i-MSCP status of the domain, alias or subdomain, undef when there is none
+
+=cut
+
+sub _domainStatus
+{
+    my ($self, $type, $id) = @_;
+
+    my %sql = (
+        dmn => 'SELECT domain_status AS status FROM domain WHERE domain_id = ?',
+        als => 'SELECT alias_status AS status FROM domain_aliasses WHERE alias_id = ?',
+        sub => 'SELECT subdomain_status AS status FROM subdomain WHERE subdomain_id = ?'
+    );
+    return undef unless $sql{$type};
+
+    my $rows = $self->{'db'}->doQuery( 'status', $sql{$type}, $id );
+    ref $rows eq 'HASH' && %{$rows} ? (keys %{$rows})[0] : undef;
+}
+
 sub _triggerDomainOnChange
 {
     my ($self, $type, $id) = @_;
@@ -702,7 +745,8 @@ sub _lineagePaths
 
  Whether certbot has a usable renewal config for the certificate
 
- An empty one, as a failed certbot run leaves behind, is skipped by certbot and so counts as none.
+ certbot skips a config it cannot load - an empty one, as a failed certbot run leaves behind, or
+ one whose certificate is not there - so such a config counts as none.
 
  Param string $certName Primary name of the certificate
  Return bool
@@ -716,7 +760,8 @@ sub _hasRenewalConf
     open my $fh, '<', $self->_lineagePaths( $certName )->{'renewal'} or return 0;
     local $/;
     my $content = <$fh> // '';
-    $content =~ /\S/ ? 1 : 0;
+    my ($cert) = $content =~ /^\s*cert\s*=\s*(\S+)/m;
+    defined $cert && -f $cert ? 1 : 0;
 }
 
 =item _parkRenewalConf($certName)
@@ -822,6 +867,84 @@ sub _deleteLineage
     0;
 }
 
+=item _adoptOrphanedLineage($certName)
+
+ Give certbot back a lineage it has lost the renewal config of, by writing a new one
+
+ Up to 2.1.4 disabling or deleting removed only the renewal config (#40, #42), so servers have
+ sites serving live/<certName> that certbot no longer renews. The lineage cannot be moved out of
+ the way for a new one: certbot --apache runs apache2ctl configtest first, which fails while a
+ vhost names a file that is not there. So when live/ is laid out the way certbot lays it out -
+ each file a link into archive/<certName>/ - a renewal config is written for it, with the
+ account and server of another lineage certbot knows. certbot then keeps or renews it in place.
+
+ Param string $certName Primary name of the certificate
+ Return int 0 on success or when there is nothing that can be adopted, other on failure
+
+=cut
+
+sub _adoptOrphanedLineage
+{
+    my ($self, $certName) = @_;
+    my $paths = $self->_lineagePaths( $certName );
+
+    return 0 if $self->_hasRenewalConf( $certName );
+
+    my %file;
+    for my $kind (qw/ cert privkey chain fullchain /) {
+        my $link = "$paths->{'live'}/$kind.pem";
+        my $target = readlink $link;
+        return 0 unless defined $target && -f $link
+            && $target =~ m{^\.\./\.\./archive/\Q$certName\E/\Q$kind\E\d+\.pem$};
+        $file{$kind} = $link;
+    }
+
+    # certbot keeps the key type of the key it has, and is told so here as it would have been
+    my $rs = execute( [ 'openssl', 'pkey', '-in', $file{'privkey'}, '-noout', '-text' ], \my $stdout, \my $stderr );
+    return 0 if $rs;
+    my $keyType = $stdout =~ /ASN1 OID|NIST CURVE/ ? 'ecdsa' : 'rsa';
+
+    my ($account, $server);
+    for my $conf (sort glob LETSENCRYPT_DIR . '/renewal/*.conf') {
+        next if $conf eq $paths->{'renewal'};
+        open my $fh, '<', $conf or next;
+        local $/;
+        my $content = <$fh> // '';
+        my ($found) = $content =~ /^\s*account\s*=\s*(\S+)/m or next;
+        $account = $found;
+        ($server) = $content =~ /^\s*server\s*=\s*(\S+)/m;
+        last;
+    }
+    $server //= 'https://acme-v02.api.letsencrypt.org/directory';
+
+    my $content = "# Rebuilt by the i-MSCP LetsEncrypt plugin for $paths->{'live'}, which had no usable renewal config\n"
+        . "archive_dir = $paths->{'archive'}\n"
+        . join( '', map { "$_ = $file{$_}\n" } qw/ cert privkey chain fullchain / )
+        . "\n[renewalparams]\n"
+        . (defined $account ? "account = $account\n" : '')
+        . "authenticator = apache\n"
+        . "installer = None\n"
+        . "server = $server\n"
+        . "key_type = $keyType\n";
+
+    make_path( dirname( $paths->{'renewal'} ) );
+    my $tmp = "$paths->{'renewal'}.tmp-$$";
+    my $fh;
+    unless (open( $fh, '>', $tmp ) && print( $fh $content ) && close( $fh )) {
+        my $message = "Could not write $tmp: $!";
+        unlink $tmp;
+        return $self->_error( $message );
+    }
+    unless (rename $tmp, $paths->{'renewal'}) {
+        my $message = "Could not move $tmp to $paths->{'renewal'}: $!";
+        unlink $tmp;
+        return $self->_error( $message );
+    }
+
+    debug( "Wrote a renewal config for the orphaned lineage of $certName: $paths->{'renewal'}" );
+    0;
+}
+
 =item _moveOrphanedLineage($certName)
 
  Move aside a lineage certbot cannot use, so that it can issue a clean one under the same name
@@ -897,6 +1020,63 @@ sub _restoreOrphanedLineage
     remove_tree( $orphaned->{'dir'} ) unless $rs;
 
     $rs;
+}
+
+=item _otherLineages($certName)
+
+ Return the names of the <certName>-NNNN lineages certbot holds beside <certName>
+
+=cut
+
+sub _otherLineages
+{
+    my ($self, $certName) = @_;
+
+    map { s{^.*/}{}r } glob LETSENCRYPT_DIR . "/live/$certName-[0-9][0-9][0-9][0-9]";
+}
+
+=item _certHasName($certFile, $name)
+
+ Whether the certificate in the given file is for the given name
+
+ Param string $certFile PEM certificate
+ Param string $name DNS name
+ Return bool
+
+=cut
+
+sub _certHasName
+{
+    my ($certFile, $name) = @_;
+
+    return 0 unless -f $certFile;
+    my $rs = execute( [ 'openssl', 'x509', '-in', $certFile, '-noout', '-text' ], \my $stdout, \my $stderr );
+    !$rs && $stdout =~ /DNS:\Q$name\E(?![\w.-])/ ? 1 : 0;
+}
+
+=item _wantWWW($lookup, $certFile, $wwwName)
+
+ Whether to ask certbot for the www name of the domain too
+
+ certbot is given --cert-name, so it reissues the lineage for exactly the names it is asked
+ for: leaving www out on a lookup that merely failed would take it off the certificate the
+ site serves. So www is left out only when it does not exist, or when the lookup could not
+ tell and the certificate in use does not have it either.
+
+ Param int $lookup What _lookup() said of the www name: 0 resolves, 1 does not exist, other unclear
+ Param string $certFile The certificate the site serves
+ Param string $wwwName The www name
+ Return int 1 to ask for it, 0 not to
+
+=cut
+
+sub _wantWWW
+{
+    my ($self, $lookup, $certFile, $wwwName) = @_;
+
+    return 1 if $lookup == 0;
+    return 0 if $lookup == 1;
+    _certHasName( $certFile, $wwwName );
 }
 
 =item _certbot()
@@ -1046,13 +1226,14 @@ sub _deleteCertificate
         $certificate->delFile();
     }
 
-    # Remove the whole lineage. Left behind, live/<certName> makes the next request of the same name
-    # fail, or land in an unused <certName>-0001 lineage (#40).
-    $rs = $self->_deleteLineage( $certName );
+    # Trigger an onchange to rebuild the domain without SSL, our event listener will then help process the domain
+    # config rebuild. Until then the vhost uses live/<certName>, so without a rebuild coming the files must stay.
+    $rs = $self->_triggerDomainOnChange($type, $id);
     return $rs if $rs;
 
-    # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
-    return $self->_triggerDomainOnChange($type, $id);
+    # Remove the whole lineage. Left behind, live/<certName> makes the next request of the same name
+    # fail, or land in an unused <certName>-0001 lineage (#40).
+    return $self->_deleteLineage( $certName );
 }
 
 =item _letsencryptInstall()

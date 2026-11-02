@@ -16,6 +16,14 @@
 #     the empty config behind, as certbot 5.9 does (issue #42);
 #   - fails, as if the domain did not resolve, for any domain under .fail.local.
 # delete removes the lineage, or fails when there is no renewal config for it.
+#
+# A renewal config holds a lineage when its cert = line names a file that is
+# there; certbot skips one it cannot load. Two knobs for the tests:
+#   CERTBOT_MOCK_APACHE_CONF_DIR  vhosts to check first, the way certbot --apache
+#                                 runs apache2ctl configtest: certonly fails when
+#                                 one names an SSL file that is not there.
+#   CERTBOT_MOCK_NEW_LINEAGE      ignore the renewal config, as certbot does with
+#                                 one it cannot load, and start a new lineage.
 
 use strict;
 use warnings;
@@ -37,6 +45,8 @@ GetOptions(
 if ($action eq 'certonly') {
     @domains or die "certbot-auto-test: certonly needs -d\n";
 
+    configtest( $ENV{'CERTBOT_MOCK_APACHE_CONF_DIR'} ) if $ENV{'CERTBOT_MOCK_APACHE_CONF_DIR'};
+
     if (my ($bad) = grep { /\.fail\.local$/ } @domains) {
         print STDERR "Certbot failed to authenticate some domains (authenticator: apache). "
             . "The Certificate Authority reported these problems:\n"
@@ -47,7 +57,7 @@ if ($action eq 'certonly') {
     }
 
     my $name = $certName // $domains[0];
-    if (has_config( $name )) {
+    if (!$ENV{'CERTBOT_MOCK_NEW_LINEAGE'} && has_config( $name )) {
         print "Certificate not yet due for renewal\nKeeping the existing certificate\n";
         exit 0;
     }
@@ -114,14 +124,31 @@ if ($action eq 'delete') {
 
 die "certbot-auto-test: unsupported action '$action'\n";
 
-# True when renewal/NAME.conf holds a config: certbot skips an empty one it cannot parse
+# True when renewal/NAME.conf holds a lineage: certbot skips a config it cannot load
 sub has_config
 {
     my ($name) = @_;
     open my $fh, '<', "$LE/renewal/$name.conf" or return 0;
     local $/;
     my $content = <$fh> // '';
-    $content =~ /\S/;
+    my ($cert) = $content =~ /^\s*cert\s*=\s*(\S+)/m;
+    defined $cert && -f $cert;
+}
+
+# What apache2ctl configtest says of a vhost naming an SSL file that is not there
+sub configtest
+{
+    my ($dir) = @_;
+    for my $conf (sort glob "$dir/*.conf") {
+        open my $fh, '<', $conf or next;
+        while (my $line = <$fh>) {
+            next unless $line =~ /^\s*(SSLCertificate\w*File)\s+(\S+)/ && !-f $2;
+            print STDERR "Error while running apache2ctl configtest.\n"
+                . "AH00526: Syntax error on line $. of $conf:\n"
+                . "$1: file '$2' does not exist or is empty\n";
+            exit 1;
+        }
+    }
 }
 
 sub run

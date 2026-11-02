@@ -95,9 +95,9 @@ ok( !-e $parked, 'and no longer kept aside' );
 # certbot was given a renewal config of its own while the domain was disabled:
 # that one is current, the parked one is not.
 write_file( $parked, "# old\n" );
-write_file( $renewal, "# new\n" );
+write_file( $renewal, "cert = /etc/hostname\n# new\n" );
 $plugin->_onAfterHttpdBuildConf( \$cfg, 'domain.tpl', { DOMAIN_NAME => $domain } );
-is( read_file( $renewal ), "# new\n", 'a renewal config in use is not overwritten by a parked one' );
+is( read_file( $renewal ), "cert = /etc/hostname\n# new\n", 'a renewal config in use is not overwritten by a parked one' );
 ok( !-e $parked, 'and the parked one is dropped' );
 
 # An empty renewal config, as a failed certbot 5.9 run leaves behind, is no config at all.
