@@ -2,6 +2,7 @@ use strict;
 use warnings;
 use FindBin;
 use lib "$FindBin::Bin/../lib";
+use File::Temp;
 use Test::More;
 use SGWTest qw/ require_root load_plugin /;
 
@@ -58,5 +59,41 @@ is(
     'certbot failed for a.test with exit code 3',
     'the exit code is reported when certbot said nothing'
 );
+
+# --- _certbotCommand -----------------------------------------------------------
+# certbot must be told which lineage to use: left to itself it picks <name>-0001
+# when it cannot match one, and the vhost keeps pointing at live/<name> (#40).
+
+my $cmd = $plugin->_certbotCommand( 'a.test', 0 );
+like( $cmd, qr/^certbot certonly /, 'certbot is asked for a certificate' );
+like( $cmd, qr/ --cert-name '?a\.test'?(?: |$)/, 'in the lineage named after the domain, which the vhost points at' );
+like( $cmd, qr/ -d '?a\.test'?(?: |$)/, 'for the domain' );
+unlike( $cmd, qr/www/, 'alone when its www name does not resolve' );
+like( $plugin->_certbotCommand( 'a.test', 1 ), qr/ --expand -d '?www\.a\.test'?$/, 'and with its www name when it does' );
+
+# --- _wantWWW -------------------------------------------------------------------
+# With --cert-name, certbot reissues the lineage for exactly the names it is
+# given, so leaving www out by mistake takes it off the certificate the site serves.
+
+my $dir = File::Temp->newdir();
+my $withWWW = "$dir/www.pem";
+system(
+    'openssl', 'req', '-x509', '-nodes', '-newkey', 'rsa:2048', '-keyout', "$dir/key.pem", '-out', $withWWW,
+    '-days', '1', '-subj', '/CN=a.test', '-addext', 'subjectAltName=DNS:a.test,DNS:www.a.test'
+) == 0 or BAIL_OUT( 'openssl cannot make a test certificate' );
+my $withoutWWW = "$dir/bare.pem";
+system(
+    'openssl', 'req', '-x509', '-nodes', '-newkey', 'rsa:2048', '-keyout', "$dir/key.pem", '-out', $withoutWWW,
+    '-days', '1', '-subj', '/CN=a.test', '-addext', 'subjectAltName=DNS:a.test'
+) == 0 or BAIL_OUT( 'openssl cannot make a test certificate' );
+
+ok( Plugin::SGW_LetsEncrypt::_certHasName( $withWWW, 'www.a.test' ), 'a certificate for www has it' );
+ok( !Plugin::SGW_LetsEncrypt::_certHasName( $withoutWWW, 'www.a.test' ), 'one without www has not' );
+ok( !Plugin::SGW_LetsEncrypt::_certHasName( "$dir/none.pem", 'www.a.test' ), 'nor has no certificate at all' );
+
+is( $plugin->_wantWWW( 0, $withoutWWW, 'www.a.test' ), 1, 'www is asked for when it resolves' );
+is( $plugin->_wantWWW( 1, $withWWW, 'www.a.test' ), 0, 'and left out when it does not exist' );
+is( $plugin->_wantWWW( 2, $withWWW, 'www.a.test' ), 1, 'kept when the lookup is inconclusive and the certificate has it' );
+is( $plugin->_wantWWW( 2, $withoutWWW, 'www.a.test' ), 0, 'and not added on an inconclusive lookup' );
 
 done_testing();

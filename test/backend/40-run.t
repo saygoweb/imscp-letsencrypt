@@ -2,7 +2,6 @@ use strict;
 use warnings;
 use FindBin;
 use lib "$FindBin::Bin/../lib";
-use File::Path qw/ make_path /;
 use Test::More;
 use SGWTest qw/
     require_root boot plugin shadow_tables create_letsencrypt_table fixture_domain fixture_letsencrypt
@@ -19,7 +18,10 @@ shadow_tables( qw/ ssl_certs domain domain_aliasses subdomain / );
 create_letsencrypt_table();
 
 my $plugin = plugin();
-cleanup_dir( $_ ) for qw{ /etc/letsencrypt /etc/letsencrypt/live /etc/letsencrypt/renewal };
+cleanup_dir( $_ ) for qw{
+    /etc/letsencrypt /etc/letsencrypt/live /etc/letsencrypt/archive /etc/letsencrypt/renewal
+    /etc/letsencrypt/renewal-disabled /etc/letsencrypt/orphaned
+};
 my $guiCerts = do { no warnings 'once'; $main::imscpConfig{'GUI_ROOT_DIR'} } . '/data/certs';
 
 sub le_row { row( 'SELECT * FROM letsencrypt WHERE letsencrypt_id = ?', @_ ) }
@@ -30,7 +32,10 @@ sub queue
 {
     my ($type, $label, %f) = @_;
     my $name = $f{'cert_name'} // test_name( $label );
-    cleanup_path( "/etc/letsencrypt/live/$name" );
+    cleanup_path(
+        "/etc/letsencrypt/live/$name", "/etc/letsencrypt/archive/$name", "/etc/letsencrypt/renewal/$name.conf",
+        "/etc/letsencrypt/renewal-disabled/$name.conf"
+    );
     my $id = fixture_domain( $type, $name );
     my $leId = fixture_letsencrypt( type => $type, id => $id, cert_name => $name, %f );
     ($id, $leId, $name);
@@ -105,15 +110,12 @@ like( le_row( $failLe )->{'state'}, qr/NXDOMAIN/, 'a retried failure is reported
 
 # --- delete ----------------------------------------------------------------------
 
-# A host that has never run certbot has no /etc/letsencrypt at all; the
-# cleanup_dir calls above take away whatever this creates.
-make_path( '/etc/letsencrypt/renewal' );
-my $renewal = cleanup_path( "/etc/letsencrypt/renewal/$alsName.conf" );
+# The add above left the alias a full lineage; give it the certificate file i-MSCP keeps too.
+my $renewal = "/etc/letsencrypt/renewal/$alsName.conf";
+ok( -s $renewal, 'the alias has a renewal config to delete' );
 my $guiCert = cleanup_path( "$guiCerts/$alsName.pem" );
-for my $file ($renewal, $guiCert) {
-    open my $fh, '>', $file or die "cannot write $file: $!";
-    close $fh;
-}
+open my $gfh, '>', $guiCert or die "cannot write $guiCert: $!";
+close $gfh;
 $dbh->do( "UPDATE domain_aliasses SET alias_status = 'ok' WHERE alias_id = ?", undef, $alsId );
 $dbh->do( "UPDATE letsencrypt SET status = 'todelete' WHERE letsencrypt_id = ?", undef, $alsLe );
 
@@ -121,6 +123,7 @@ is( $plugin->run(), 0, 'a delete runs' );
 ok( !le_row( $alsLe ), 'the letsencrypt row is gone' );
 ok( !cert_row( 'als', $alsId ), 'the ssl_certs row is gone' );
 ok( !-e $renewal, 'certbot no longer renews it' );
+ok( !-e "/etc/letsencrypt/$_", "$_ is gone" ) for "live/$alsName", "archive/$alsName";
 ok( !-e $guiCert, 'the certificate file i-MSCP kept is gone' );
 is( row( 'SELECT alias_status FROM domain_aliasses WHERE alias_id = ?', $alsId )->{'alias_status'}, 'toadd',
     'the alias is queued for a rebuild without SSL' );

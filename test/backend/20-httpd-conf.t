@@ -46,25 +46,71 @@ ok(
 );
 is( $cfg, $tpl, 'and left as they were' );
 
-# A disabled domain must stop being renewed, or certbot renew fails on it every week.
-cleanup_dir( $_ ) for qw{ /etc/letsencrypt /etc/letsencrypt/renewal };
+# A disabled domain must stop being renewed, or certbot renew fails on it every
+# week. Disabling is reversible, so its renewal config is kept aside rather than
+# deleted, and put back when the domain is enabled again (#42).
+cleanup_dir( $_ ) for qw{ /etc/letsencrypt /etc/letsencrypt/renewal /etc/letsencrypt/renewal-disabled };
 my $renewal = cleanup_path( "/etc/letsencrypt/renewal/$domain.conf" );
+my $parked = cleanup_path( "/etc/letsencrypt/renewal-disabled/$domain.conf" );
 make_path( '/etc/letsencrypt/renewal' );
-open my $fh, '>', $renewal or die "cannot write $renewal: $!";
-print $fh "# test\n";
-close $fh;
+
+sub write_file
+{
+    my ($file, $content) = @_;
+    open my $fh, '>', $file or die "cannot write $file: $!";
+    print $fh $content;
+    close $fh;
+}
+
+sub read_file
+{
+    my ($file) = @_;
+    open my $fh, '<', $file or return undef;
+    local $/;
+    <$fh>;
+}
+
+write_file( $renewal, "# test\n" );
 
 $cfg = $tpl;
 is(
     $plugin->_onAfterHttpdBuildConf( \$cfg, 'domain_disabled.tpl', { DOMAIN_NAME => $domain } ), 0,
     'domain_disabled.tpl is handled'
 );
-ok( !-e $renewal, 'the renewal config of a disabled domain is removed' );
+ok( !-e $renewal, 'certbot no longer renews a disabled domain' );
+is( read_file( $parked ), "# test\n", 'its renewal config is kept aside' );
 is( $cfg, $tpl, 'the disabled page itself is left alone' );
 
 is(
     $plugin->_onAfterHttpdBuildConf( \$cfg, 'domain_disabled.tpl', { DOMAIN_NAME => $domain } ), 0,
+    'disabling it again is fine'
+);
+is( read_file( $parked ), "# test\n", 'and keeps the config aside' );
+
+$cfg = $tpl;
+is( $plugin->_onAfterHttpdBuildConf( \$cfg, 'domain.tpl', { DOMAIN_NAME => $domain } ), 0, 'the domain is enabled again' );
+is( read_file( $renewal ), "# test\n", 'its renewal config is back' );
+ok( !-e $parked, 'and no longer kept aside' );
+
+# certbot was given a renewal config of its own while the domain was disabled:
+# that one is current, the parked one is not.
+write_file( $parked, "# old\n" );
+write_file( $renewal, "cert = /etc/hostname\n# new\n" );
+$plugin->_onAfterHttpdBuildConf( \$cfg, 'domain.tpl', { DOMAIN_NAME => $domain } );
+is( read_file( $renewal ), "cert = /etc/hostname\n# new\n", 'a renewal config in use is not overwritten by a parked one' );
+ok( !-e $parked, 'and the parked one is dropped' );
+
+# An empty renewal config, as a failed certbot 5.9 run leaves behind, is no config at all.
+write_file( $parked, "# parked\n" );
+write_file( $renewal, '' );
+$plugin->_onAfterHttpdBuildConf( \$cfg, 'domain.tpl', { DOMAIN_NAME => $domain } );
+is( read_file( $renewal ), "# parked\n", 'an empty renewal config is replaced by the parked one' );
+
+unlink $renewal;
+is(
+    $plugin->_onAfterHttpdBuildConf( \$cfg, 'domain_disabled.tpl', { DOMAIN_NAME => $domain } ), 0,
     'a domain with no renewal config is fine too'
 );
+ok( !-e $parked, 'and has nothing kept aside' );
 
 done_testing();
