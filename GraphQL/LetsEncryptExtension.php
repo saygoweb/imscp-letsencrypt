@@ -66,7 +66,9 @@ final class LetsEncryptExtension implements Extension
               certName: String!
               """
               Whether the backend has caught up with the last change.
-              The certbot failure reason, when there is one, is carried as message.
+              When the last certificate request failed, message says why and what to do,
+              written for the site owner: it does not name the certificate authority.
+              The output of certbot itself is logged on the server, not carried here.
               """
               provisioning: Provisioning!
             }

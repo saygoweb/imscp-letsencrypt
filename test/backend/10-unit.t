@@ -39,23 +39,87 @@ is(
 );
 like( $plugin->_lastError(), qr/\.\.\.$/, 'and says it was cut' );
 
+$plugin->_error( 'The site is down.', "certbot said:\n  line 1\n  line 2\n" );
+is( $plugin->_lastError(), 'The site is down.', 'the detail is not part of the message the client sees' );
+like( $plugin->{'lastErrorDetail'}, qr/line 1\n  line 2/, 'but is kept, as it is, for the log' );
+like( scalar Plugin::SGW_LetsEncrypt::getMessageByType( 'error' ), qr/The site is down\.\ncertbot said:/,
+    'which has both' );
+$plugin->_error( 'Again.' );
+ok( !defined $plugin->{'lastErrorDetail'}, 'a later error without detail does not carry the earlier one' );
+
 $plugin->_clearError();
 ok( !defined $plugin->{'lastError'}, "_clearError forgets the previous domain's error" );
+ok( !defined $plugin->{'lastErrorDetail'}, 'and its detail' );
 
-# --- _certbotError ------------------------------------------------------------
+# --- _certbotError (#46) ------------------------------------------------------
+# The message is what the client reads - in the panel, and through GraphQL in
+# apps that never name the certificate authority - so it says what is wrong and
+# what to do. certbot's own output goes to the detail, for the log.
 
-is(
-    Plugin::SGW_LetsEncrypt::_certbotError( 'a.test', 1, 'out', 'err' ),
-    'certbot failed for a.test: err',
-    'stderr carries the reason'
-);
-is(
-    Plugin::SGW_LetsEncrypt::_certbotError( 'a.test', 1, 'out', '  ' ),
-    'certbot failed for a.test: out',
+sub certbot_error { [ Plugin::SGW_LetsEncrypt::_certbotError( 'a.test', 1, undef, $_[0] ) ] }
+
+# certbot 2+ reports a failed challenge like this
+sub challenge
+{
+    my ($domain, $type, $detail) = @_;
+    "Certbot failed to authenticate some domains (authenticator: apache). The Certificate Authority reported "
+        . "these problems:\n  Domain: $domain\n  Type:   $type\n  Detail: $detail\n\nHint: The Certificate "
+        . "Authority failed to verify the temporary Apache configuration changes made by Certbot.\n";
+}
+
+my ($message, $detail) = @{ certbot_error( challenge( 'a.test', 'dns', 'DNS problem: NXDOMAIN looking up A for a.test' ) ) };
+like( $message, qr/^a\.test cannot be found in the public DNS\. /, 'a name missing from the DNS' );
+like( $detail, qr/^certbot failed for a\.test: Certbot failed .*NXDOMAIN/s, 'with what certbot said as the detail' );
+
+($message) = @{ certbot_error( challenge(
+    'www.a.test', 'connection', '192.0.2.1: Fetching http://www.a.test/.well-known/acme-challenge/x: Timeout during '
+    . 'connect (likely firewall problem)'
+) ) };
+like( $message, qr/^www\.a\.test could not be reached on port 80 \(http\)\. /,
+    'a site that cannot be reached, naming the name that failed' );
+
+($message) = @{ certbot_error( challenge(
+    'a.test', 'unauthorized', '192.0.2.1: Invalid response from http://a.test/.well-known/acme-challenge/x: 404'
+) ) };
+like( $message, qr{^A check request to http://a\.test/\.well-known/acme-challenge/ did not reach this site\. },
+    'a challenge answered by something else' );
+
+($message) = @{ certbot_error( challenge( 'a.test', 'caa', 'CAA record for a.test prevents issuance' ) ) };
+like( $message, qr/^a\.test has a CAA record in its DNS /, 'a CAA record in the way' );
+
+($message) = @{ certbot_error(
+    "An unexpected error occurred:\nError creating new order :: too many certificates (5) already issued for this "
+    . "exact set of identifiers in the last 168h0m0s, retry after 2026-11-04 10:15:00 UTC: see "
+    . "https://letsencrypt.org/docs/rate-limits/#new-certificates-per-exact-set-of-identifiers\n"
+) };
+is( $message, 'Too many certificate requests for a.test have been made recently. Try again after 2026-11-04 10:15:00 UTC.',
+    'a rate limit, saying when to try again' );
+($message) = @{ certbot_error( "Error: too many failed authorizations recently\n" ) };
+like( $message, qr/Try again in an hour or so\.$/, 'or roughly, when certbot does not say' );
+
+($message) = @{ certbot_error( "Error while running apache2ctl configtest.\nAH00526: Syntax error on line 3\n" ) };
+like( $message, qr/^The certificate for a\.test could not be issued because of a problem on this server\. Contact support\.$/,
+    'a problem on the server' );
+
+($message, $detail) = @{ certbot_error( "Something nobody has seen before\n" ) };
+like( $message, qr/^The certificate for a\.test could not be issued\. Try again later/, 'anything else' );
+like( $detail, qr/Something nobody has seen before/, 'with what certbot said as the detail' );
+
+for my $case (
+    challenge( 'a.test', 'dns', 'DNS problem: NXDOMAIN looking up A for a.test' ),
+    "Error: too many failed authorizations recently\n",
+    "Something nobody has seen before\n"
+) {
+    unlike( certbot_error( $case )->[0], qr/certbot|Let.s Encrypt|Certificate Authority|acme-v02/i,
+        'the message names neither certbot nor the certificate authority' );
+}
+
+is_deeply(
+    [ Plugin::SGW_LetsEncrypt::_certbotError( 'a.test', 1, 'out', '  ' ) ]->[1], 'certbot failed for a.test: out',
     'stdout is used when stderr is blank'
 );
 is(
-    Plugin::SGW_LetsEncrypt::_certbotError( 'a.test', 3, undef, undef ),
+    [ Plugin::SGW_LetsEncrypt::_certbotError( 'a.test', 3, undef, undef ) ]->[1],
     'certbot failed for a.test with exit code 3',
     'the exit code is reported when certbot said nothing'
 );
@@ -189,20 +253,21 @@ is_deeply( [ Plugin::SGW_LetsEncrypt::_foreignAddresses( [ '192.0.2.1', '198.51.
 
     $dns{'a.test'} = [ 0, '198.51.100.7' ];
     is( $plugin->_checkPointsHere( 'a.test' ), 1, 'a name that points elsewhere cannot' );
-    like( $plugin->_lastError(), qr/^a\.test resolves to 198\.51\.100\.7, which is not this server \(192\.0\.2\.1\)\./,
+    like( $plugin->_lastError(), qr/^a\.test points at 198\.51\.100\.7, not at this server \(192\.0\.2\.1\)\./,
         'saying where it points and where it should' );
+    unlike( $plugin->_lastError(), qr/Let.s Encrypt|certbot/i, 'without naming the certificate authority' );
 
     $dns{'a.test'} = [ 0, '192.0.2.1', '2001:db8::99' ];
     is( $plugin->_checkPointsHere( 'a.test' ), 1, 'nor can one with any address elsewhere, IPv6 included' );
-    like( $plugin->_lastError(), qr/resolves to 2001:db8::99,/, 'naming only the address that is not here' );
+    like( $plugin->_lastError(), qr/points at 2001:db8::99,/, 'naming only the address that is not here' );
 
     $dns{'a.test'} = [ 1 ];
     is( $plugin->_checkPointsHere( 'a.test' ), 1, 'a name that does not exist cannot' );
-    like( $plugin->_lastError(), qr/^Cannot resolve a\.test: it does not exist/, 'saying so' );
+    like( $plugin->_lastError(), qr/^a\.test cannot be found in the public DNS\./, 'saying so' );
 
     $dns{'a.test'} = [ 2 ];
     is( $plugin->_checkPointsHere( 'a.test' ), 1, 'nor one the public DNS gives no address for' );
-    like( $plugin->_lastError(), qr/^Cannot resolve a\.test: the public DNS gave no address/, 'saying so' );
+    like( $plugin->_lastError(), qr/^a\.test could not be looked up in the public DNS: /, 'saying so' );
 
     $dns{'www.a.test'} = [ 2 ];
     is( $plugin->_wwwPointsElsewhere( 'a.test' ), 0, 'an unclear www lookup is not taken as pointing elsewhere' );

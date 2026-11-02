@@ -261,7 +261,8 @@ requeue( $le, 'tochange' );
 }
 my $elsewhere = le_row( $le );
 is( $elsewhere->{'status'}, 'error', 'and is reported as failed' );
-like( $elsewhere->{'state'}, qr/\Q$name\E-0001/, 'naming where certbot put it' );
+like( $elsewhere->{'state'}, qr/because of a problem on this server\. Contact support\.$/, 'telling the client to contact support' );
+like( scalar iMSCP::Debug::getMessageByType( 'error' ), qr/\Q$name\E-0001/, 'and logging where certbot put it' );
 
 # --- a current certificate is used as it is (#47) -----------------------------------
 # certbot would keep it anyway, but asking still talks to Let's Encrypt: an outage

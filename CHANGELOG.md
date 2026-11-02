@@ -1,5 +1,17 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 2.1.8
+
+* Report a failed certificate request in words the site owner can act on (#46), instead of certbot's
+  raw output. The common failures each get their own message saying what is wrong and what to do: the
+  name is not in the public DNS, the site cannot be reached on port 80, the check request reached
+  something other than this site, a CAA record forbids the certificate, too many requests were made
+  recently (with when to try again), or a problem on the server (contact support). Anything else gets a
+  general message. The messages do not name certbot or the certificate authority, since apps reading
+  them through GraphQL (`provisioning.message`) show them as they are. certbot's own output is logged
+  with the message for support.
+* The DNS check from 2.1.7 words its messages the same way.
+
 ## Version 2.1.7
 
 * Check that a domain points at this server before asking Let's Encrypt for its certificate (#45).

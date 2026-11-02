@@ -81,8 +81,8 @@ ok( !cert_row( 'dmn', $dmnId + 1000 ), 'no row lands against an id nobody asked 
 
 my $fail = le_row( $failLe );
 is( $fail->{'status'}, 'error', 'a certbot failure is reported against its domain' );
-like( $fail->{'state'}, qr/^certbot failed for \Q$failName\E: /, 'saying certbot failed' );
-like( $fail->{'state'}, qr/NXDOMAIN/, 'and why' );
+like( $fail->{'state'}, qr/^\Q$failName\E cannot be found in the public DNS\. /, 'saying why, for the client' );
+unlike( $fail->{'state'}, qr/certbot|NXDOMAIN/, "without certbot's own output" );
 unlike( $fail->{'state'}, qr/\n/, 'on one line' );
 ok( !cert_row( 'dmn', $failId ), 'the placeholder certificate is taken back' );
 is( row( 'SELECT domain_status FROM domain WHERE domain_id = ?', $failId )->{'domain_status'}, 'ok',
@@ -106,7 +106,7 @@ is( scalar( () = rows( "SELECT cert_id FROM ssl_certs WHERE domain_type = 'dmn' 
 # error with an empty one.
 $dbh->do( "UPDATE letsencrypt SET status = 'tochange' WHERE letsencrypt_id = ?", undef, $failLe );
 $plugin->run();
-like( le_row( $failLe )->{'state'}, qr/NXDOMAIN/, 'a retried failure is reported again' );
+like( le_row( $failLe )->{'state'}, qr/cannot be found in the public DNS/, 'a retried failure is reported again' );
 
 # --- delete ----------------------------------------------------------------------
 
