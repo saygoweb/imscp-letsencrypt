@@ -115,4 +115,39 @@ is_deeply( [ lineages( $name ) ], [ $name ], 'in its one lineage' );
 is( slurp( "$LE/renewal/$name.conf" ), $conf, 'which certbot renews' );
 ok( !-e "$LE/renewal-disabled/$name.conf", 'with nothing left aside' );
 
+# --- delete, then request the same name again (#40) --------------------------------
+
+($id, $le, $name) = queue( 'readd' );
+$plugin->run();
+requeue( $le, 'todelete' );
+is( $plugin->run(), 0, 'a certificate is deleted' );
+ok( !le_row( $le ), 'its row goes' );
+ok( !-e "$LE/$_", "$_ goes" ) for "live/$name", "archive/$name", "renewal/$name.conf";
+
+my $again = fixture_letsencrypt( type => 'dmn', id => $id, cert_name => $name, status => 'toadd' );
+is( $plugin->run(), 0, 'the same name is requested again' );
+issued( $again, 'and issued' );
+is_deeply( [ lineages( $name ) ], [ $name ], 'into the lineage the vhost points at, with no -0001 beside it' );
+ok( has_config( "$LE/renewal/$name.conf" ), 'which certbot renews' );
+
+# --- delete while disabled --------------------------------------------------------
+
+($id, $le, $name) = queue( 'deldisabled' );
+$plugin->run();
+build( 'domain_disabled.tpl', $name );
+requeue( $le, 'todelete' );
+is( $plugin->run(), 0, "a disabled domain's certificate is deleted" );
+ok( !le_row( $le ), 'its row goes' );
+ok( !-e "$LE/$_", "$_ goes" ) for "live/$name", "archive/$name", "renewal/$name.conf", "renewal-disabled/$name.conf";
+
+# --- delete a lineage certbot no longer knows about -------------------------------
+
+($id, $le, $name) = queue( 'delorphan' );
+$plugin->run();
+unlink "$LE/renewal/$name.conf";
+requeue( $le, 'todelete' );
+is( $plugin->run(), 0, 'a certificate with no renewal config is deleted' );
+ok( !le_row( $le ), 'its row goes' );
+ok( !-e "$LE/$_", "$_ goes" ) for "live/$name", "archive/$name";
+
 done_testing();

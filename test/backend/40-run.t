@@ -123,6 +123,7 @@ is( $plugin->run(), 0, 'a delete runs' );
 ok( !le_row( $alsLe ), 'the letsencrypt row is gone' );
 ok( !cert_row( 'als', $alsId ), 'the ssl_certs row is gone' );
 ok( !-e $renewal, 'certbot no longer renews it' );
+ok( !-e "/etc/letsencrypt/$_", "$_ is gone" ) for "live/$alsName", "archive/$alsName";
 ok( !-e $guiCert, 'the certificate file i-MSCP kept is gone' );
 is( row( 'SELECT alias_status FROM domain_aliasses WHERE alias_id = ?', $alsId )->{'alias_status'}, 'toadd',
     'the alias is queued for a rebuild without SSL' );

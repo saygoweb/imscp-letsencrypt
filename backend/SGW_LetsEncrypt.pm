@@ -769,6 +769,50 @@ sub _restoreRenewalConf
     0;
 }
 
+=item _deleteLineage($certName)
+
+ Remove everything certbot keeps for the certificate: live/, archive/ and its renewal config
+
+ certbot delete is asked first. It cannot help when the renewal config is gone (an earlier plugin
+ removed only that, #40), so whatever is left is then removed directly.
+
+ Param string $certName Primary name of the certificate
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _deleteLineage
+{
+    my ($self, $certName) = @_;
+    my $paths = $self->_lineagePaths( $certName );
+
+    # certbot delete finds the lineage by its renewal config
+    my $rs = $self->_restoreRenewalConf( $certName );
+    return $rs if $rs;
+
+    if ($self->_hasRenewalConf( $certName )) {
+        my $command = $self->_certbot() . ' delete --non-interactive --cert-name ' . escapeShell( $certName );
+        $rs = execute( $command, \my $stdout, \my $stderr );
+        debug( $command );
+        debug( $stdout ) if $stdout;
+        debug( "certbot could not delete $certName, removing its files directly: " . ($stderr || "exit code $rs") )
+            if $rs;
+    }
+
+    for my $path (@{$paths}{qw/ live archive renewal parked /}) {
+        next unless -e $path || -l $path;
+        debug( "Removing $path" );
+        remove_tree( $path, { error => \my $errors } );
+        if (@{$errors} || -e $path || -l $path) {
+            return $self->_error(
+                "Could not remove $path: " . (join( ', ', map { values %{$_} } @{$errors} ) || 'still there')
+            );
+        }
+    }
+
+    0;
+}
+
 =item _certbot()
 
  Return the certbot to run: the real one, or the mock in testmode
@@ -916,12 +960,10 @@ sub _deleteCertificate
         $certificate->delFile();
     }
 
-    # Remove Let's Encrypt renewal configuration
-    my $renewalFile = iMSCP::File->new( filename => "/etc/letsencrypt/renewal/$certName.conf" );
-    if (-f $renewalFile->{'filename'}) {
-        debug("Removing renewal config: " . $renewalFile->{'filename'});
-        $renewalFile->delFile();
-    }
+    # Remove the whole lineage. Left behind, live/<certName> makes the next request of the same name
+    # fail, or land in an unused <certName>-0001 lineage (#40).
+    $rs = $self->_deleteLineage( $certName );
+    return $rs if $rs;
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
     return $self->_triggerDomainOnChange($type, $id);
