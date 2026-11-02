@@ -51,6 +51,12 @@ use constant ERROR_MAX_LENGTH => 1000;
 # Where certbot keeps its lineages: live/<name>/, archive/<name>/, renewal/<name>.conf
 use constant LETSENCRYPT_DIR => '/etc/letsencrypt';
 
+# Messages for the client, reported against the domain (see _error)
+use constant DNS_MISSING => '%s cannot be found in the public DNS. If you have just registered it or changed its DNS, '
+    . 'wait for the change to reach the public DNS (this can take a few hours), then try again.';
+use constant SERVER_PROBLEM => 'The certificate for %s could not be issued because of a problem on this server. '
+    . 'Contact support.';
+
 # A certificate this close to expiry is left to certbot to renew (seconds; certbot renews at 30 days)
 use constant RENEW_BEFORE => 30 * 24 * 3600;
 
@@ -332,25 +338,29 @@ sub _clearError
     my $self = shift;
 
     undef $self->{'lastError'};
+    undef $self->{'lastErrorDetail'};
 
     0;
 }
 
-=item _error($message)
+=item _error($message [, $detail])
 
  Record an error against the domain being processed and log it
 
- The message is normalised so that it reads well in the frontend, where it is reported
- against the domain as its state.
+ The message is reported against the domain as its state, which the client sees: in the panel, and
+ through GraphQL as the provisioning message of the site. So it is written for the client, and
+ normalised to read well on one line. The detail - certbot's own output, say - is for support: it
+ is logged with the message, but not shown to the client.
 
- Param string $message Error message
+ Param string $message Error message, for the client
+ Param string $detail Optional technical detail, for the log only
  Return int 1
 
 =cut
 
 sub _error
 {
-    my ($self, $message) = @_;
+    my ($self, $message, $detail) = @_;
 
     $message = 'Unknown error' unless defined $message && $message =~ /\S/;
     $message =~ s/\s+/ /g;
@@ -358,7 +368,8 @@ sub _error
     $message = substr( $message, 0, ERROR_MAX_LENGTH - 3 ).'...' if length $message > ERROR_MAX_LENGTH;
 
     $self->{'lastError'} = $message;
-    error( $message );
+    $self->{'lastErrorDetail'} = defined $detail && $detail =~ /\S/ ? $detail : undef;
+    error( defined $self->{'lastErrorDetail'} ? "$message\n$detail" : $message );
 
     1;
 }
@@ -555,8 +566,11 @@ sub _checkPointsHere
     my ($self, $certName) = @_;
 
     my ($status, @resolved) = $self->_resolve( $certName );
-    return $self->_error( "Cannot resolve $certName: it does not exist in the public DNS" ) if $status == 1;
-    return $self->_error( "Cannot resolve $certName: the public DNS gave no address for it, or could not be reached" ) if $status != 0;
+    return $self->_error( sprintf( DNS_MISSING, $certName ) ) if $status == 1;
+    return $self->_error(
+        "$certName could not be looked up in the public DNS: it has no address there, or the DNS could not be "
+            . 'reached. If you have just changed its DNS, wait for the change to reach the public DNS, then try again.'
+    ) if $status != 0;
     return 0 unless $self->_checkDNSEnabled();
 
     my @foreign = _foreignAddresses( \@resolved, [ $self->_serverAddresses() ] );
@@ -564,9 +578,8 @@ sub _checkPointsHere
 
     my $here = $main::imscpConfig{'BASE_SERVER_PUBLIC_IP'};
     $self->_error( sprintf(
-        '%s resolves to %s, which is not this server%s. Let\'s Encrypt would fail to validate it. '
-            . 'Point its DNS at this server, or wait for a change to reach the public DNS, then request the '
-            . 'certificate again.',
+        '%s points at %s, not at this server%s. Point its DNS at this server, or if you have just done so, wait '
+            . 'for the change to reach the public DNS, then try again.',
         $certName, join( ', ', @foreign ), (defined $here && $here =~ /\S/ ? " ($here)" : '')
     ) );
 }
@@ -709,12 +722,15 @@ sub _addCertificate
     # live/$certName, which still holds the old certificate.
     my ($elsewhere) = grep { !$otherLineages{$_} } $self->_otherLineages( $certName );
     if ($rs || defined $elsewhere) {
-        my $message = $rs
+        my ($message, $detail) = $rs
             ? _certbotError( $certName, $rs, $stdout, $stderr )
-            : sprintf(
-                'certbot saved the certificate of %s as %s, not in the lineage the site uses. '
-                    . 'Remove it with certbot delete --cert-name %s, check renewal/%s.conf, and request again.',
-                $certName, $elsewhere, $elsewhere, $certName
+            : (
+                sprintf( SERVER_PROBLEM, $certName ),
+                sprintf(
+                    'certbot saved the certificate of %s as %s, not in the lineage the site uses. '
+                        . 'Remove it with certbot delete --cert-name %s, check renewal/%s.conf, and request again.',
+                    $certName, $elsewhere, $elsewhere, $certName
+                )
             );
         # No certificate was issued, so take back the placeholder that was put in place for it.
         # Left behind it would give the domain SSL support backed by /etc/letsencrypt files that
@@ -722,7 +738,7 @@ sub _addCertificate
         $self->_revertSelfSignedCertificate( $type, $id );
         # The vhost still points at live/$certName: give it back the certificate it had
         $self->_restoreOrphanedLineage( $orphaned );
-        return $self->_error( $message );
+        return $self->_error( $message, $detail );
     }
 
     # Trigger an onchange to rebuild the domain, our event listener will then help process the domain config rebuild.
@@ -731,13 +747,17 @@ sub _addCertificate
 
 =item _certbotError($certName, $rs, $stdout, $stderr)
 
- Returns the message describing a failed certbot invocation
+ Describe a failed certbot run: a message the client can act on, and the detail for support
+
+ The message is what the client reads, in the panel and in apps reading it through GraphQL, which
+ never name the certificate authority. So it says what is wrong with the site and what to do, in
+ words a site owner knows, and leaves certbot's own output to the detail.
 
  Param string $certName Primary name of the target certificate / domain
  Param int $rs Exit code returned by certbot
  Param string $stdout Standard output of certbot
  Param string $stderr Standard error of certbot
- Return string Error message
+ Return (string, string) The message, and the detail: certbot's own output
 
 =cut
 
@@ -747,12 +767,55 @@ sub _certbotError
 
     # certbot reports the reason for the failure on stderr, but falls back to stdout when it fails
     # before it gets that far.
-    for my $output ($stderr, $stdout) {
-        next unless defined $output && $output =~ /\S/;
-        return sprintf( 'certbot failed for %s: %s', $certName, $output );
+    my ($output) = grep { defined && /\S/ } $stderr, $stdout;
+    my $detail = defined $output
+        ? sprintf( 'certbot failed for %s: %s', $certName, $output )
+        : sprintf( 'certbot failed for %s with exit code %d', $certName, $rs );
+    $output //= '';
+
+    # The certificate authority reports a failed challenge per name, as Domain:, Type: and Detail:
+    # lines, Type being the ACME problem type
+    my ($name) = $output =~ /^\s*Domain:\s*(\S+)/m;
+    my ($type) = $output =~ /^\s*Type:\s*(\S+)/m;
+    my ($caDetail) = $output =~ /^\s*Detail:\s*(.+)$/m;
+    $name //= $certName;
+    $type //= '';
+
+    my $message;
+    if ($type eq 'rateLimited' || $output =~ /too many (?:certificates|failed authorizations|requests|new orders)|rate ?limit/i) {
+        my ($after) = $output =~ /retry after (\d{4}-\d\d-\d\d[ T]\d\d:\d\d(?::\d\d)?(?: UTC|Z)?)/i;
+        $message = sprintf(
+            'Too many certificate requests for %s have been made recently. %s',
+            $name, defined $after ? "Try again after $after." : 'Try again in an hour or so.'
+        );
+    } elsif ($type eq 'caa' || $output =~ /CAA record/i) {
+        $message = sprintf(
+            '%s has a CAA record in its DNS that does not allow its certificate to be issued. Add a CAA record '
+                . 'with the value "letsencrypt.org" beside it, or remove the CAA records, then try again.',
+            $name
+        );
+    } elsif ($type eq 'dns' || $output =~ /DNS problem|NXDOMAIN|no valid A records/i) {
+        $message = sprintf( DNS_MISSING, $name );
+    } elsif ($type eq 'connection' || $output =~ /Timeout during connect|Connection refused|firewall problem/i) {
+        $message = sprintf(
+            '%s could not be reached on port 80 (http). The certificate is issued only while the site answers '
+                . 'http requests: check that no firewall or proxy blocks them, then try again.',
+            $name
+        );
+    } elsif ($type eq 'unauthorized' || $output =~ /Invalid response from/i) {
+        $message = sprintf(
+            'A check request to http://%s/.well-known/acme-challenge/ did not reach this site. Check that %s '
+                . 'points at this server, and that no redirect or .htaccess rule blocks that path, then try again.',
+            $name, $name
+        );
+    } elsif ($output =~ /apache2?ctl|configtest|Could not find|Unable to find|Permission denied|Errno/i) {
+        $message = sprintf( SERVER_PROBLEM, $certName );
+    } else {
+        $message = sprintf( 'The certificate for %s could not be issued. Try again later, and contact support if '
+            . 'it keeps failing.', $certName );
     }
 
-    sprintf( 'certbot failed for %s with exit code %d', $certName, $rs );
+    ($message, $detail);
 }
 
 sub _updateSelfSignedCertificate
