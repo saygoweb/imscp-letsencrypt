@@ -1,162 +1,130 @@
 #!/usr/bin/perl
-use File::Path qw/ mkpath remove_tree /;
+# A stand-in for certbot, run by the plugin in testmode. It keeps lineages under
+# /etc/letsencrypt the way certbot 5 does - archive/<name>/*1.pem, live/<name>/
+# symlinks into it, renewal/<name>.conf - with self-signed certificates, so the
+# plugin's handling of them can be tested without asking Let's Encrypt.
+#
+#   certbot-auto-test.pm certonly [--cert-name NAME] -d DOMAIN [--expand -d DOMAIN]... [flags]
+#   certbot-auto-test.pm delete --non-interactive --cert-name NAME
+#
+# certonly, like certbot:
+#   - keeps lineage NAME (--cert-name, else the first -d) when renewal/NAME.conf
+#     holds a config, and says "Keeping the existing certificate";
+#   - otherwise starts a new lineage named after the first renewal/NAME[-NNNN].conf
+#     that does not exist yet, which it creates empty first, and fails with
+#     CertStorageError if archive/ or live/ already holds that name - leaving
+#     the empty config behind, as certbot 5.9 does (issue #42);
+#   - fails, as if the domain did not resolve, for any domain under .fail.local.
+# delete removes the lineage, or fails when there is no renewal config for it.
+
+use strict;
+use warnings;
+use Fcntl qw/ O_CREAT O_EXCL O_WRONLY /;
+use File::Copy qw/ copy /;
+use File::Path qw/ make_path remove_tree /;
 use Getopt::Long;
 
-# Create a self signed certificate under /etc/letsencrypt for test purposes
-# - This only processes the first -d domain option.  It doesn't create a proper csr, is it CN in the Subject only
+my $LE = '/etc/letsencrypt';
 
-my $Debug = 99;
-
-my $store_path = '/etc/letsencrypt/live/';
-
-# Pickup the domain name(s) from the -d options on the command line
-my $domain = 'test1.local';
-@options;
-#  certonly --apache --no-bootstrap --non-interactive -v -d
+my $action = shift @ARGV // '';
+my ($certName, @domains);
 GetOptions(
-    'apache', sub {  },
-    'domain|d=s', sub { $domain = $_[1] },
-    'no-bootstrap', sub {  },
-    'non-interactive', sub {  },
-    'no-self-update', sub {  },
-    'verbose|v', sub {  },
-    'help|h', sub { showUsage(); },
-    @options,
-) or showUsage();
+    'cert-name=s' => \$certName,
+    'domain|d=s'  => \@domains,
+    map { $_ => sub {} } qw/ apache no-bootstrap non-interactive no-self-update verbose|v expand /
+) or die "certbot-auto-test: unknown option\n";
 
-# Allow the failure path to be exercised in test mode: certbot reports any domain under
-# .fail.local as one it could not authenticate, the way it does for a domain that does not resolve.
-if ($domain =~ /\.fail\.local$/) {
-    print STDERR "Certbot failed to authenticate some domains (authenticator: apache). "
-        . "The Certificate Authority reported these problems:\n"
-        . "  Domain: $domain\n"
-        . "  Type:   dns\n"
-        . "  Detail: DNS problem: NXDOMAIN looking up A for $domain\n";
-    exit 1;
-}
+if ($action eq 'certonly') {
+    @domains or die "certbot-auto-test: certonly needs -d\n";
 
-# Ensure the store_path exists
-mkpath($store_path);
+    if (my ($bad) = grep { /\.fail\.local$/ } @domains) {
+        print STDERR "Certbot failed to authenticate some domains (authenticator: apache). "
+            . "The Certificate Authority reported these problems:\n"
+            . "  Domain: $bad\n"
+            . "  Type:   dns\n"
+            . "  Detail: DNS problem: NXDOMAIN looking up A for $bad\n";
+        exit 1;
+    }
 
-# Currently we don't process more than one -d option, and the last one wins.  This is typically www.domain so strip the www if present
-$domain =~ s/www.//;
+    my $name = $certName // $domains[0];
+    if (has_config( $name )) {
+        print "Certificate not yet due for renewal\nKeeping the existing certificate\n";
+        exit 0;
+    }
 
-my $domain_store_path = '/etc/letsencrypt/live/' . $domain;
-my $key_file = $domain_store_path . '/' . 'privkey.pem';
-my $cert_file = $domain_store_path . '/' . 'cert.pem';
-my $chain_file = $domain_store_path . '/' . 'chain.pem';
+    make_path( "$LE/renewal" );
+    my ($lineage, $fh);
+    for (my $n = 0; ; $n++) {
+        $lineage = $n ? sprintf( '%s-%04d', $name, $n ) : $name;
+        last if sysopen $fh, "$LE/renewal/$lineage.conf", O_CREAT | O_EXCL | O_WRONLY;
+        die "certbot-auto-test: $LE/renewal/$lineage.conf: $!\n" unless $!{EEXIST};
+    }
 
-# Ensure the domain store path exists
-mkpath($domain_store_path);
+    for my $kind (qw/ archive live /) {
+        if (-e "$LE/$kind/$lineage") {
+            print STDERR "certbot.errors.CertStorageError: $kind directory exists for $lineage\n";
+            exit 1;
+        }
+    }
 
-# Create the key
-execute('openssl genrsa -out ' . $key_file . ' 2048');
-# Create the cert
-execute('openssl req -x509 -new -key ' . $key_file . ' -subj /CN=' . $domain . ' -days 3650 -out ' . $cert_file);
-# Create the chain
-execute('openssl req -x509 -new -key ' . $key_file . ' -subj /CN=' . $domain . ' -days 3650 -out ' . $chain_file);
+    my $archive = "$LE/archive/$lineage";
+    my $live = "$LE/live/$lineage";
+    make_path( $archive, $live, { mode => 0700 } );
+    run( 'openssl', 'genrsa', '-out', "$archive/privkey1.pem", '2048' );
+    run(
+        'openssl', 'req', '-x509', '-new', '-key', "$archive/privkey1.pem", '-subj', "/CN=$domains[0]",
+        '-days', '3650', '-out', "$archive/cert1.pem"
+    );
+    for my $copy (qw/ chain fullchain /) {
+        copy( "$archive/cert1.pem", "$archive/${copy}1.pem" ) or die "certbot-auto-test: copy: $!\n";
+    }
+    for my $file (qw/ privkey cert chain fullchain /) {
+        symlink "../../archive/$lineage/${file}1.pem", "$live/$file.pem"
+            or die "certbot-auto-test: symlink $live/$file.pem: $!\n";
+    }
 
-# Done
+    print $fh <<EOF;
+# renewal config written by certbot-auto-test
+version = certbot-auto-test
+archive_dir = $archive
+cert = $live/cert.pem
+privkey = $live/privkey.pem
+chain = $live/chain.pem
+fullchain = $live/fullchain.pem
 
-###########
-# Functions
-###########
-
-sub showUsage {
-    print <<EOF
-Usage:
-    certbot-auto-test [options]
-    -d domain
-    --non-interactive
-    --no-bootstrap
-    --no-self-update
-    -v --verbose
+[renewalparams]
+authenticator = apache
 EOF
+    close $fh or die "certbot-auto-test: $!\n";
+
+    print "Successfully received certificate.\nCertificate is saved at: $live/fullchain.pem\n";
+    exit 0;
 }
 
-sub debug {
-	my $level = $_[1] || 1;
-	if ($Debug >= $level) { 
-		my $debugstring = $_[0];
-		if ($ENV{"GATEWAY_INTERFACE"}) { $debugstring =~ s/^ /&nbsp&nbsp /; $debugstring .= "<br />"; }
-		print localtime(time)." - DEBUG $level - $. - : $debugstring\n";
-		}
-	0;
+if ($action eq 'delete') {
+    defined $certName or die "certbot-auto-test: delete needs --cert-name\n";
+    unless (has_config( $certName )) {
+        print STDERR "No certificate found with name $certName (expected $LE/renewal/$certName.conf).\n";
+        exit 1;
+    }
+    remove_tree( "$LE/live/$certName", "$LE/archive/$certName", "$LE/renewal/$certName.conf" );
+    print "Deleted all files relating to certificate $certName.\n";
+    exit 0;
 }
 
-=item getExitCode([ $ret = $? ])
+die "certbot-auto-test: unsupported action '$action'\n";
 
- Return human exit code
-
- Param int $ret Raw exit code (default to $?)
- Return int exit code or die on failure
-
-=cut
-
-sub getExitCode(;$)
+# True when renewal/NAME.conf holds a config: certbot skips an empty one it cannot parse
+sub has_config
 {
-    my $ret = shift // $?;
-
-    if ($ret == -1) {
-        debug('Could not execute command');
-        return 1;
-    }
-
-    if ($ret & 127) {
-        debug( sprintf( 'Command died with signal %d, %s coredump', ($ret & 127), ($? & 128) ? 'with' : 'without' ) );
-        return $ret;
-    }
-
-    $ret = $ret >> 8;
-    debug( sprintf( 'Command exited with value: %s', $ret ) ) if $ret != 0;
-    $ret;
+    my ($name) = @_;
+    open my $fh, '<', "$LE/renewal/$name.conf" or return 0;
+    local $/;
+    my $content = <$fh> // '';
+    $content =~ /\S/;
 }
 
-=item execute($command [, \$stdout = undef [, \$stderr = undef]])
-
- Execute the given command
-
- Param string|array $command Command to execute
- Param string \$stdout OPTIONAL Variable for capture of STDOUT
- Param string \$stderr OPTIONAL Variable for capture of STDERR
- Return int Command exit code or die on failure
-
-=cut
-
-sub execute($;$$)
+sub run
 {
-    my ($command, $stdout, $stderr) = @_;
-
-    defined( $command ) or die( '$command parameter is not defined' );
-
-    if ($stdout) {
-        ref $stdout eq 'SCALAR' or die( "Expects a scalar reference as second parameter for capture of STDOUT" );
-        $$stdout = '';
-    }
-
-    if ($stderr) {
-        ref $stderr eq 'SCALAR' or die( "Expects a scalar reference as third parameter for capture of STDERR" );
-        $$stderr = '';
-    }
-
-    my $multitArgs = ref $command eq 'ARRAY';
-    debug( $multitArgs ? "@{$command}" : $command );
-
-    if ($stdout && $stderr) {
-        ($$stdout, $$stderr) = capture { system( $multitArgs ? @{$command} : $command); };
-        chomp( $$stdout, $$stderr );
-    } elsif ($stdout) {
-        $$stdout = capture_stdout { system( $multitArgs ? @{$command} : $command ); };
-        chomp( $$stdout );
-    } elsif ($stderr) {
-        $$stderr = capture_stderr { system( $multitArgs ? @{$command} : $command ); };
-        chomp( $stderr );
-    } else {
-        system( $multitArgs ? @{$command} : $command ) != -1 or die(
-            sprintf( 'Could not execute command: %s', $! )
-        );
-    }
-
-    getExitCode();
+    system( @_ ) == 0 or die "certbot-auto-test: @_ failed\n";
 }
-
