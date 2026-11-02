@@ -1,5 +1,12 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 2.1.6
+
+* Remove the LetsEncrypt entry from the reseller panel (#20). The plugin has no reseller features,
+  and the page behind the menu was never adapted to this plugin: it queried columns the
+  `letsencrypt` table does not have and loaded its template from the wrong path, so opening it
+  failed with an error.
+
 ## Version 2.1.5
 
 * Fix re-enabling a disabled customer (#42): disabling deleted the domain's renewal config and
