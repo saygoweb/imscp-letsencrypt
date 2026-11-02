@@ -1,5 +1,23 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 2.1.5
+
+* Fix re-enabling a disabled customer (#42): disabling deleted the domain's renewal config and
+  orphaned its `live/` and `archive/` directories, so on re-enable certbot 5.9 issued a new
+  certificate, failed to save it with "archive directory exists", and the domain was rebuilt
+  without an SSL vhost. Disabling now moves the renewal config to
+  `/etc/letsencrypt/renewal-disabled/`, and it is put back when the domain is enabled again or its
+  certificate is requested; certbot then keeps the existing certificate.
+* Fix deleting a certificate (#40): only the renewal config was removed, so requesting the same name
+  later failed or created an unused `<name>-0001` lineage while the site went on serving the old,
+  never-renewed certificate. Deleting now runs `certbot delete` and removes whatever `live/`,
+  `archive/` and renewal config it leaves.
+* certbot is now always given `--cert-name`, so a certificate lands in the lineage the vhost uses.
+* Lineages already orphaned by earlier versions (no renewal config, or an empty one) are moved to
+  `/etc/letsencrypt/orphaned/<name>-<time>/` before a new certificate is requested, and put back if
+  the request fails. Existing `<name>-NNNN` duplicates are left alone and can be removed with
+  `certbot delete --cert-name <name>-NNNN`.
+
 ## Version 2.1.3
 
 * Implement the customer-facing feature gate: `SGW_LetsEncrypt::customerHasLetsEncrypt()` used

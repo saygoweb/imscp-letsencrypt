@@ -448,9 +448,16 @@ sub _addCertificate
     my $rs = $self->_restoreRenewalConf( $certName );
     return $rs if $rs;
 
+    # Files certbot has no renewal config for would stop it saving the certificate under $certName
+    ($rs, my $orphaned) = $self->_moveOrphanedLineage( $certName );
+    return $rs if $rs;
+
     # Fake out the SSL_SUPPORT in the Domains module by updating the ssl_certs table and creating a fake cert file
     $rs = $self->_updateSelfSignedCertificate($type, $id);
-    $rs == 0 or return $rs;
+    if ($rs) {
+        $self->_restoreOrphanedLineage( $orphaned );
+        return $rs;
+    }
 
     my $haveWWW = !$self->{'testmode'} && (_lookup('www.' . $certName) == 0) ? 1 : 0;
 
@@ -471,6 +478,8 @@ sub _addCertificate
         # Left behind it would give the domain SSL support backed by /etc/letsencrypt files that
         # do not exist, and the next rebuild of the domain would produce a vhost httpd cannot load.
         $self->_revertSelfSignedCertificate( $type, $id );
+        # The vhost still points at live/$certName: give it back the certificate it had
+        $self->_restoreOrphanedLineage( $orphaned );
         return $self->_error( $message );
     }
 
@@ -811,6 +820,83 @@ sub _deleteLineage
     }
 
     0;
+}
+
+=item _moveOrphanedLineage($certName)
+
+ Move aside a lineage certbot cannot use, so that it can issue a clean one under the same name
+
+ A lineage is orphaned when live/ or archive/ is there but the renewal config is missing or
+ empty, as earlier versions of the plugin left them (#40, #42). certbot then refuses to save
+ the certificate ("archive directory exists") or saves it as an unused <certName>-0001. The
+ files go to orphaned/<certName>-<time>/, laid out as under /etc/letsencrypt so the live/
+ symlinks still resolve; _restoreOrphanedLineage() puts them back should the request fail.
+
+ Param string $certName Primary name of the certificate
+ Return list (int 0 on success, other on failure; hashref { dir, moved => { from => to } } or undef)
+
+=cut
+
+sub _moveOrphanedLineage
+{
+    my ($self, $certName) = @_;
+    my $paths = $self->_lineagePaths( $certName );
+
+    return (0, undef) if $self->_hasRenewalConf( $certName );
+
+    my @found = grep { -e $paths->{$_} || -l $paths->{$_} } qw/ live archive renewal /;
+    return (0, undef) unless @found;
+
+    my $dest = LETSENCRYPT_DIR . "/orphaned/$certName-" . strftime( '%Y%m%d%H%M%S', localtime );
+    my $orphaned = { dir => $dest, moved => {} };
+    for my $what (@found) {
+        my $from = $paths->{$what};
+        my $to = $dest . substr( $from, length LETSENCRYPT_DIR );
+        make_path( dirname( $to ), { mode => 0700 } );
+        unless (rename $from, $to) {
+            my $message = "Could not move $from to $to: $!";
+            $self->_restoreOrphanedLineage( $orphaned );
+            return ($self->_error( $message ), undef);
+        }
+        $orphaned->{'moved'}->{$from} = $to;
+    }
+
+    debug( "Moved the orphaned lineage of $certName, which had no usable renewal config, to $dest" );
+    (0, $orphaned);
+}
+
+=item _restoreOrphanedLineage($orphaned)
+
+ Put back what _moveOrphanedLineage() moved aside, when no new certificate took its place
+
+ Param hashref|undef $orphaned As returned by _moveOrphanedLineage()
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _restoreOrphanedLineage
+{
+    my ($self, $orphaned) = @_;
+    return 0 unless $orphaned;
+
+    my $rs = 0;
+    for my $from (sort keys %{$orphaned->{'moved'}}) {
+        my $to = $orphaned->{'moved'}->{$from};
+        if (-e $from || -l $from) {
+            error( "Not putting back $to: $from is there again" );
+            $rs = 1;
+            next;
+        }
+        unless (rename $to, $from) {
+            error( "Could not move $to back to $from: $!" );
+            $rs = 1;
+        }
+    }
+
+    # Only empty directories are left once everything is back
+    remove_tree( $orphaned->{'dir'} ) unless $rs;
+
+    $rs;
 }
 
 =item _certbot()

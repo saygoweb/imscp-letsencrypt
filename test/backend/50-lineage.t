@@ -150,4 +150,48 @@ is( $plugin->run(), 0, 'a certificate with no renewal config is deleted' );
 ok( !le_row( $le ), 'its row goes' );
 ok( !-e "$LE/$_", "$_ goes" ) for "live/$name", "archive/$name";
 
+# --- a lineage an earlier plugin left orphaned -----------------------------------
+# Up to 2.1.4 disabling or deleting removed only the renewal config, and a failed
+# certbot 5.9 run leaves an empty one. Servers have such lineages today.
+
+for my $case ([ 'orphan', 'no renewal config' ], [ 'emptyconf', 'an empty renewal config' ]) {
+    my ($label, $what) = @{$case};
+    ($id, $le, $name) = queue( $label );
+    $plugin->run();
+    my $old = slurp( "$LE/live/$name/cert.pem" );
+    if ($label eq 'orphan') {
+        unlink "$LE/renewal/$name.conf";
+    } else {
+        open my $fh, '>', "$LE/renewal/$name.conf" or die $!;
+        close $fh;
+    }
+    requeue( $le, 'tochange' );
+
+    is( $plugin->run(), 0, "a lineage with $what is requested again" );
+    issued( $le, 'and issued' );
+    is_deeply( [ lineages( $name ) ], [ $name ], 'into the lineage the vhost points at' );
+    ok( has_config( "$LE/renewal/$name.conf" ), 'which certbot renews' );
+    isnt( slurp( "$LE/live/$name/cert.pem" ), $old, 'with a new certificate' );
+    my @aside = glob "$LE/orphaned/$name-*";
+    is( scalar @aside, 1, 'the orphaned lineage is kept aside' );
+    is( slurp( "$aside[0]/live/$name/cert.pem" ), $old, 'with its certificate still readable' );
+}
+
+# --- a failed request puts an orphaned lineage back --------------------------------
+
+my $failName = "orphanfail-$$.fail.local";
+($id, $le, $name) = queue( 'orphanfail', cert_name => $failName );
+mkdir "$LE/archive";
+mkdir "$LE/archive/$failName" or die $!;
+mkdir "$LE/live/$failName" or die $!;
+open my $ofh, '>', "$LE/archive/$failName/cert1.pem" or die $!;
+print $ofh "old\n";
+close $ofh;
+symlink "../../archive/$failName/cert1.pem", "$LE/live/$failName/cert.pem" or die $!;
+
+is( $plugin->run(), 0, 'a request for an orphaned lineage that certbot refuses runs' );
+is( le_row( $le )->{'status'}, 'error', 'and fails' );
+is( slurp( "$LE/live/$failName/cert.pem" ), "old\n", 'leaving the old certificate where the vhost expects it' );
+is( scalar( () = glob "$LE/orphaned/$failName-*" ), 0, 'with nothing left aside' );
+
 done_testing();
