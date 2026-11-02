@@ -59,4 +59,15 @@ is(
     'the exit code is reported when certbot said nothing'
 );
 
+# --- _certbotCommand -----------------------------------------------------------
+# certbot must be told which lineage to use: left to itself it picks <name>-0001
+# when it cannot match one, and the vhost keeps pointing at live/<name> (#40).
+
+my $cmd = $plugin->_certbotCommand( 'a.test', 0 );
+like( $cmd, qr/^certbot certonly /, 'certbot is asked for a certificate' );
+like( $cmd, qr/ --cert-name '?a\.test'?(?: |$)/, 'in the lineage named after the domain, which the vhost points at' );
+like( $cmd, qr/ -d '?a\.test'?(?: |$)/, 'for the domain' );
+unlike( $cmd, qr/www/, 'alone when its www name does not resolve' );
+like( $plugin->_certbotCommand( 'a.test', 1 ), qr/ --expand -d '?www\.a\.test'?$/, 'and with its www name when it does' );
+
 done_testing();

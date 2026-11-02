@@ -41,9 +41,15 @@ use version;
 use parent 'Common::SingletonClass';
 
 use Data::Dumper;
+use File::Basename qw/ dirname /;
+use File::Path qw/ make_path remove_tree /;
+use POSIX qw/ strftime /;
 
 # Maximum length of an error message recorded in the letsencrypt.state column
 use constant ERROR_MAX_LENGTH => 1000;
+
+# Where certbot keeps its lineages: live/<name>/, archive/<name>/, renewal/<name>.conf
+use constant LETSENCRYPT_DIR => '/etc/letsencrypt';
 
 =head1 DESCRIPTION
 
@@ -438,21 +444,19 @@ sub _addCertificate
         return $self->_error( "Cannot resolve $certName" );
     }
 
+    # A domain that was disabled has its renewal config parked; certbot needs it back to find the lineage (#42)
+    my $rs = $self->_restoreRenewalConf( $certName );
+    return $rs if $rs;
+
     # Fake out the SSL_SUPPORT in the Domains module by updating the ssl_certs table and creating a fake cert file
-    my $rs = 0;
     $rs = $self->_updateSelfSignedCertificate($type, $id);
     $rs == 0 or return $rs;
 
-    my $certNameWWW = 'www.' . $certName;
-    my $haveWWW = !$self->{'testmode'} && (_lookup($certNameWWW) == 0) ? 1 : 0;
+    my $haveWWW = !$self->{'testmode'} && (_lookup('www.' . $certName) == 0) ? 1 : 0;
 
     # Call certbot to create the key and certificate under /etc/letsencrypt
-    my $certbot = $self->{'testmode'} ? $self->{'certbotTest'} : 'certbot';
     my ($stdout, $stderr);
-    my $command = $certbot . " certonly --apache --no-bootstrap --non-interactive -v -d " . escapeShell($certName);
-    if ($haveWWW) {
-        $command = $command . " --expand -d " . escapeShell($certNameWWW);
-    }
+    my $command = $self->_certbotCommand( $certName, $haveWWW );
     $rs = execute(
         $command,
         \$stdout, \$stderr
@@ -662,6 +666,146 @@ sub _triggerDomainOnChange
     0;
 }
 
+=item _lineagePaths($certName)
+
+ Return the paths certbot keeps the lineage of the given certificate under, and where the
+ plugin parks its renewal config while the domain is disabled
+
+ Param string $certName Primary name of the certificate, which names its lineage
+ Return hashref { live, archive, renewal, parked }
+
+=cut
+
+sub _lineagePaths
+{
+    my ($self, $certName) = @_;
+    my $dir = LETSENCRYPT_DIR;
+
+    {
+        live    => "$dir/live/$certName",
+        archive => "$dir/archive/$certName",
+        renewal => "$dir/renewal/$certName.conf",
+        parked  => "$dir/renewal-disabled/$certName.conf"
+    };
+}
+
+=item _hasRenewalConf($certName)
+
+ Whether certbot has a usable renewal config for the certificate
+
+ An empty one, as a failed certbot run leaves behind, is skipped by certbot and so counts as none.
+
+ Param string $certName Primary name of the certificate
+ Return bool
+
+=cut
+
+sub _hasRenewalConf
+{
+    my ($self, $certName) = @_;
+
+    open my $fh, '<', $self->_lineagePaths( $certName )->{'renewal'} or return 0;
+    local $/;
+    my $content = <$fh> // '';
+    $content =~ /\S/ ? 1 : 0;
+}
+
+=item _parkRenewalConf($certName)
+
+ Stop certbot renewing the certificate of a disabled domain, without losing its lineage
+
+ The renewal config is moved to renewal-disabled/, where certbot does not look, and
+ _restoreRenewalConf() puts it back. Deleting it would orphan live/ and archive/ (#42).
+
+ Param string $certName Primary name of the certificate
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _parkRenewalConf
+{
+    my ($self, $certName) = @_;
+    my $paths = $self->_lineagePaths( $certName );
+
+    return 0 unless -f $paths->{'renewal'};
+
+    make_path( dirname( $paths->{'parked'} ), { mode => 0700 } );
+    debug( "Parking the renewal config of disabled domain $certName: $paths->{'parked'}" );
+    rename $paths->{'renewal'}, $paths->{'parked'}
+        or return $self->_error( "Could not move $paths->{'renewal'} to $paths->{'parked'}: $!" );
+
+    0;
+}
+
+=item _restoreRenewalConf($certName)
+
+ Put back the renewal config _parkRenewalConf() kept aside, if any
+
+ A usable renewal config already in place wins: it is newer than the parked one, which is dropped.
+
+ Param string $certName Primary name of the certificate
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _restoreRenewalConf
+{
+    my ($self, $certName) = @_;
+    my $paths = $self->_lineagePaths( $certName );
+
+    return 0 unless -f $paths->{'parked'};
+
+    if ($self->_hasRenewalConf( $certName )) {
+        debug( "Dropping $paths->{'parked'}: $paths->{'renewal'} is in use" );
+        unlink $paths->{'parked'} or return $self->_error( "Could not remove $paths->{'parked'}: $!" );
+        return 0;
+    }
+
+    make_path( dirname( $paths->{'renewal'} ) );
+    debug( "Restoring the renewal config of $certName: $paths->{'renewal'}" );
+    rename $paths->{'parked'}, $paths->{'renewal'}
+        or return $self->_error( "Could not move $paths->{'parked'} to $paths->{'renewal'}: $!" );
+
+    0;
+}
+
+=item _certbot()
+
+ Return the certbot to run: the real one, or the mock in testmode
+
+=cut
+
+sub _certbot
+{
+    my $self = shift;
+
+    $self->{'testmode'} ? $self->{'certbotTest'} : 'certbot';
+}
+
+=item _certbotCommand($certName, $haveWWW)
+
+ Return the certbot command requesting the certificate of the given domain
+
+ --cert-name pins the lineage to the name the vhost points at, live/<certName>/. Left to
+ itself certbot picks <certName>-0001 when it cannot match a lineage (#40).
+
+ Param string $certName Primary name of the certificate / domain
+ Param bool $haveWWW Whether to include www.<certName>
+ Return string
+
+=cut
+
+sub _certbotCommand
+{
+    my ($self, $certName, $haveWWW) = @_;
+
+    my $command = $self->_certbot()
+        . ' certonly --apache --no-bootstrap --non-interactive -v --cert-name ' . escapeShell( $certName )
+        . ' -d ' . escapeShell( $certName );
+    $command .= ' --expand -d ' . escapeShell( "www.$certName" ) if $haveWWW;
+    $command;
+}
+
 =item _onAfterHttpdBuildConf($cfgTpl, $filename, $data)
 
  Param Hash %data Domain data as per the Domains module
@@ -673,19 +817,17 @@ sub _onAfterHttpdBuildConf
 {
     my ($self, $cfgTpl, $filename, $data) = @_;
 
-    if ($filename eq 'domain_disabled.tpl') {
-        my $domain = $data->{'DOMAIN_NAME'};
-        my $renewalFile = iMSCP::File->new( filename => "/etc/letsencrypt/renewal/$domain.conf" );
-        if (-f $renewalFile->{'filename'}) {
-            debug("Removing renewal config for disabled domain: " . $renewalFile->{'filename'});
-            $renewalFile->delFile();
-        }
-        return 0;
-    }
+    # HTTP-01 cannot pass while the domain is disabled, so certbot must stop renewing it. Disabling is
+    # reversible, so the lineage is kept and only its renewal config is parked (#42).
+    return $self->_parkRenewalConf( $data->{'DOMAIN_NAME'} ) if $filename eq 'domain_disabled.tpl';
 
     return unless $filename eq 'domain.tpl';
 
     my $domain = $data->{'DOMAIN_NAME'};
+
+    # Enabled again: renew it again. The panel may or may not queue a new request as well.
+    my $rs = $self->_restoreRenewalConf( $domain );
+    return $rs if $rs;
     my $domain_store_path = '/etc/letsencrypt/live/' . $domain . '/';
     my $key_file = $domain_store_path . 'privkey.pem';
     my $cert_file = $domain_store_path . 'cert.pem';
