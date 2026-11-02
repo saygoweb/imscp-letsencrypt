@@ -19,4 +19,9 @@
  */
 
 return array(
+    // Before asking Let's Encrypt for a certificate, check that the domain's DNS points at this
+    // server, and report it against the domain when it does not, rather than spend one of the few
+    // failed validations Let's Encrypt allows an hour on a request that cannot pass.
+    // Set to false when the server is reached through a proxy or CDN, whose addresses are not its own.
+    'check_dns_points_here' => true
 );

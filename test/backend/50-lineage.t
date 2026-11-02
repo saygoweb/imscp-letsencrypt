@@ -248,8 +248,12 @@ is( slurp( "$aside[0]/live/$name/cert.pem" ), $old, 'with its certificate still 
 # Should certbot reject a renewal config the plugin found fine, it saves the
 # certificate as an unused <name>-0001 while the vhost keeps serving the old one.
 
+# The certificate is due for renewal, or the plugin would keep it without asking certbot (#47).
 ($id, $le, $name) = queue( 'elsewhere' );
-$plugin->run();
+{
+    local $ENV{'CERTBOT_MOCK_DAYS'} = 10;
+    $plugin->run();
+}
 requeue( $le, 'tochange' );
 {
     local $ENV{'CERTBOT_MOCK_NEW_LINEAGE'} = 1;
@@ -258,6 +262,46 @@ requeue( $le, 'tochange' );
 my $elsewhere = le_row( $le );
 is( $elsewhere->{'status'}, 'error', 'and is reported as failed' );
 like( $elsewhere->{'state'}, qr/\Q$name\E-0001/, 'naming where certbot put it' );
+
+# --- a current certificate is used as it is (#47) -----------------------------------
+# certbot would keep it anyway, but asking still talks to Let's Encrypt: an outage
+# there, or of the network, would fail a domain whose certificate is good.
+
+my $calls = File::Temp->new();
+sub certbot_runs { my $log = slurp( $calls->filename ) // ''; scalar( () = $log =~ /^certonly /mg ) }
+
+($id, $le, $name) = queue( 'current' );
+$plugin->run();
+issued( $le, 'a certificate is issued' );
+my $current = slurp( "$LE/live/$name/cert.pem" );
+iMSCP::Database->factory()->getRawDb()->do( "UPDATE domain SET domain_status = 'ok' WHERE domain_id = ?", undef, $id );
+requeue( $le, 'tochange' );
+{
+    local $ENV{'CERTBOT_MOCK_LOG'} = $calls->filename;
+    is( $plugin->run(), 0, 'it is requested again' );
+}
+issued( $le, 'and is ok' );
+is( certbot_runs(), 0, 'without running certbot' );
+is( slurp( "$LE/live/$name/cert.pem" ), $current, 'keeping the certificate' );
+ok( row( 'SELECT cert_id FROM ssl_certs WHERE domain_type = ? AND domain_id = ?', 'dmn', $id ),
+    'with SSL support for the domain' );
+is( row( 'SELECT domain_status FROM domain WHERE domain_id = ?', $id )->{'domain_status'}, 'toadd',
+    'which is rebuilt' );
+
+# One due for renewal is left to certbot
+($id, $le, $name) = queue( 'due' );
+{
+    local $ENV{'CERTBOT_MOCK_DAYS'} = 10;
+    $plugin->run();
+}
+issued( $le, 'a certificate due for renewal soon is issued' );
+requeue( $le, 'tochange' );
+{
+    local $ENV{'CERTBOT_MOCK_LOG'} = $calls->filename;
+    is( $plugin->run(), 0, 'it is requested again' );
+}
+issued( $le, 'and is ok' );
+is( certbot_runs(), 1, 'through certbot' );
 
 # --- a request for a domain that is still disabled -------------------------------
 # Disabling stops renewals, and nothing must start them again, or bring the site
