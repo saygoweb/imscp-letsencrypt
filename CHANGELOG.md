@@ -1,5 +1,12 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 2.1.9
+
+* Deleting or disabling a domain, alias or subdomain that has a Let's Encrypt certificate deletes or
+  disables it (#51). Deleting the certificate used to queue the host for a rebuild, which replaced its
+  pending delete or disable: the host's mail and FTP accounts and certificate were removed, but the
+  host itself was rebuilt without SSL and left in place.
+
 ## Version 2.1.8
 
 * Report a failed certificate request in words the site owner can act on (#46), instead of certbot's
