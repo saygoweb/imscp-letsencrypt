@@ -96,4 +96,126 @@ is( $plugin->_wantWWW( 1, $withWWW, 'www.a.test' ), 0, 'and left out when it doe
 is( $plugin->_wantWWW( 2, $withWWW, 'www.a.test' ), 1, 'kept when the lookup is inconclusive and the certificate has it' );
 is( $plugin->_wantWWW( 2, $withoutWWW, 'www.a.test' ), 0, 'and not added on an inconclusive lookup' );
 
+
+# --- _certNames -------------------------------------------------------------------
+
+is_deeply( [ sort( Plugin::SGW_LetsEncrypt::_certNames( $withWWW ) ) ], [ 'a.test', 'www.a.test' ],
+    'the names of a certificate are its subjectAltName' );
+is_deeply( [ Plugin::SGW_LetsEncrypt::_certNames( "$dir/none.pem" ) ], [], 'no certificate has no names' );
+
+# --- _certIsCurrent (#47) -----------------------------------------------------------
+# A certificate certbot holds, for exactly the names wanted and not due for renewal,
+# is used without asking certbot.
+
+my $live = "$dir/live";
+mkdir $live or die $!;
+sub make_cert
+{
+    my ($days, @names) = @_;
+    system(
+        'openssl', 'req', '-x509', '-nodes', '-newkey', 'rsa:2048', '-keyout', "$dir/key.pem",
+        '-out', "$live/cert.pem", '-days', $days, '-subj', "/CN=$names[0]",
+        '-addext', 'subjectAltName=' . join( ',', map { "DNS:$_" } @names )
+    ) == 0 or BAIL_OUT( 'openssl cannot make a test certificate' );
+}
+{
+    no warnings 'redefine';
+    my $hasConf = 1;
+    local *Plugin::SGW_LetsEncrypt::_lineagePaths = sub { { live => $live } };
+    local *Plugin::SGW_LetsEncrypt::_hasRenewalConf = sub { $hasConf };
+
+    make_cert( 90, 'a.test' );
+    ok( $plugin->_certIsCurrent( 'a.test', 0 ), 'a certificate for the name, valid for 90 days, is current' );
+    ok( !$plugin->_certIsCurrent( 'a.test', 1 ), 'but not when www is to be added to it' );
+    ok( !$plugin->_certIsCurrent( 'b.test', 0 ), 'nor for another name' );
+    $hasConf = 0;
+    ok( !$plugin->_certIsCurrent( 'a.test', 0 ), 'nor when certbot has no renewal config for it' );
+    $hasConf = 1;
+
+    make_cert( 90, 'a.test', 'www.a.test' );
+    ok( $plugin->_certIsCurrent( 'a.test', 1 ), 'one with www is current when www is wanted' );
+    ok( !$plugin->_certIsCurrent( 'a.test', 0 ), 'but not when www is to be taken off' );
+
+    make_cert( 10, 'a.test' );
+    ok( !$plugin->_certIsCurrent( 'a.test', 0 ), 'one due for renewal is not current' );
+
+    unlink "$live/cert.pem";
+    ok( !$plugin->_certIsCurrent( 'a.test', 0 ), 'and no certificate is not current' );
+}
+
+# --- _hostAddresses -----------------------------------------------------------------
+
+is_deeply(
+    [ Plugin::SGW_LetsEncrypt::_hostAddresses(
+        "a.test has address 192.0.2.1\na.test has IPv6 address 2001:db8::1\na.test mail is handled by 10 mx.a.test.\n"
+    ) ],
+    [ 0, '192.0.2.1', '2001:db8::1' ],
+    'host output gives the IPv4 and IPv6 addresses of a name'
+);
+is_deeply(
+    [ Plugin::SGW_LetsEncrypt::_hostAddresses(
+        "www.a.test is an alias for a.test.\na.test has address 192.0.2.1\n"
+    ) ],
+    [ 0, '192.0.2.1' ],
+    'and follows an alias'
+);
+is_deeply( [ Plugin::SGW_LetsEncrypt::_hostAddresses( "Host nope.test not found: 3(NXDOMAIN)\n" ) ], [ 1 ],
+    'a name that does not exist' );
+is_deeply( [ Plugin::SGW_LetsEncrypt::_hostAddresses( ";; connection timed out; no servers could be reached\n" ) ],
+    [ 2 ], 'a lookup that failed is unclear' );
+is_deeply( [ Plugin::SGW_LetsEncrypt::_hostAddresses( undef ) ], [ 2 ], 'and so is no output at all' );
+
+# --- _foreignAddresses ----------------------------------------------------------------
+
+is_deeply( [ Plugin::SGW_LetsEncrypt::_foreignAddresses( [ '192.0.2.1' ], [ '192.0.2.1' ] ) ], [],
+    'an address of this server is not foreign' );
+is_deeply( [ Plugin::SGW_LetsEncrypt::_foreignAddresses( [ '2001:DB8:0::1' ], [ '2001:db8::1' ] ) ], [],
+    'nor is one spelt differently' );
+is_deeply( [ Plugin::SGW_LetsEncrypt::_foreignAddresses( [ '192.0.2.1', '198.51.100.7' ], [ '192.0.2.1' ] ) ],
+    [ '198.51.100.7' ], 'any other address is' );
+
+# --- _checkPointsHere / _wwwPointsElsewhere (#45) ----------------------------------------
+
+{
+    no warnings qw/ redefine once /;
+    my %dns;
+    local *Plugin::SGW_LetsEncrypt::_resolve = sub { @{ $dns{$_[1]} // [ 1 ] } };
+    local *Plugin::SGW_LetsEncrypt::_serverAddresses = sub { ( '10.0.0.5', '192.0.2.1' ) };
+    local $main::imscpConfig{'BASE_SERVER_PUBLIC_IP'} = '192.0.2.1';
+
+    %dns = ( 'a.test' => [ 0, '192.0.2.1' ], 'www.a.test' => [ 0, '198.51.100.7' ] );
+    is( $plugin->_checkPointsHere( 'a.test' ), 0, 'a name that points here can be asked for' );
+    is( $plugin->_wwwPointsElsewhere( 'a.test' ), 1, 'a www name pointing at another server is noticed' );
+
+    $dns{'a.test'} = [ 0, '198.51.100.7' ];
+    is( $plugin->_checkPointsHere( 'a.test' ), 1, 'a name that points elsewhere cannot' );
+    like( $plugin->_lastError(), qr/^a\.test resolves to 198\.51\.100\.7, which is not this server \(192\.0\.2\.1\)\./,
+        'saying where it points and where it should' );
+
+    $dns{'a.test'} = [ 0, '192.0.2.1', '2001:db8::99' ];
+    is( $plugin->_checkPointsHere( 'a.test' ), 1, 'nor can one with any address elsewhere, IPv6 included' );
+    like( $plugin->_lastError(), qr/resolves to 2001:db8::99,/, 'naming only the address that is not here' );
+
+    $dns{'a.test'} = [ 1 ];
+    is( $plugin->_checkPointsHere( 'a.test' ), 1, 'a name that does not exist cannot' );
+    like( $plugin->_lastError(), qr/^Cannot resolve a\.test: it does not exist/, 'saying so' );
+
+    $dns{'a.test'} = [ 2 ];
+    is( $plugin->_checkPointsHere( 'a.test' ), 1, 'nor one the public DNS gives no address for' );
+    like( $plugin->_lastError(), qr/^Cannot resolve a\.test: the public DNS gave no address/, 'saying so' );
+
+    $dns{'www.a.test'} = [ 2 ];
+    is( $plugin->_wwwPointsElsewhere( 'a.test' ), 0, 'an unclear www lookup is not taken as pointing elsewhere' );
+
+    local $plugin->{'config'} = { check_dns_points_here => 0 };
+    $dns{'a.test'} = [ 0, '198.51.100.7' ];
+    $dns{'www.a.test'} = [ 0, '198.51.100.7' ];
+    is( $plugin->_checkPointsHere( 'a.test' ), 0, 'with the check turned off, a name pointing elsewhere can be asked for' );
+    is( $plugin->_wwwPointsElsewhere( 'a.test' ), 0, 'and www is not checked' );
+    $dns{'a.test'} = [ 1 ];
+    is( $plugin->_checkPointsHere( 'a.test' ), 1, 'but it must still exist' );
+}
+
+is( $plugin->_checkDNSEnabled(), 1, 'the check is on by default' );
+
 done_testing();

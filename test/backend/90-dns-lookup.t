@@ -19,4 +19,11 @@ is( Plugin::SGW_LetsEncrypt::_lookup( 'www.example.com' ), 0, 'so does its www n
 is( Plugin::SGW_LetsEncrypt::_lookup( "nothing-$$.example.invalid" ), 1, 'a name that does not exist is reported as missing' );
 is( Plugin::SGW_LetsEncrypt::_lookup( 'nodots' ), 1, 'a single-label name that does not exist is reported as missing' );
 
+
+my $plugin = bless {}, 'Plugin::SGW_LetsEncrypt';
+my ($status, @addresses) = $plugin->_resolve( 'example.com' );
+is( $status, 0, '_resolve finds a name with an address' );
+ok( scalar( grep { /^[0-9.]+$/ } @addresses ), 'and gives its IPv4 addresses' );
+is( ( $plugin->_resolve( "nothing-$$.example.invalid" ) )[0], 1, 'and reports a name that does not exist' );
+
 done_testing();

@@ -51,6 +51,9 @@ use constant ERROR_MAX_LENGTH => 1000;
 # Where certbot keeps its lineages: live/<name>/, archive/<name>/, renewal/<name>.conf
 use constant LETSENCRYPT_DIR => '/etc/letsencrypt';
 
+# A certificate this close to expiry is left to certbot to renew (seconds; certbot renews at 30 days)
+use constant RENEW_BEFORE => 30 * 24 * 3600;
+
 =head1 DESCRIPTION
 
  This package provides the backend part for the i-MSCP LetsEncrypt plugin.
@@ -420,6 +423,208 @@ sub _lookup
     return 2;
 }
 
+=item _hostAddresses($stdout)
+
+ Parse the output of host(1) for a name
+
+ Param string $stdout What host said
+ Return (int, list) 0 and the addresses the name has, 1 when it does not exist, 2 when the
+  answer is unclear (no address, or the lookup itself failed)
+
+=cut
+
+sub _hostAddresses
+{
+    my ($stdout) = @_;
+    $stdout //= '';
+
+    return 1 if $stdout =~ /Host \S+ not found/m;
+    my @addresses = $stdout =~ /\bhas (?:IPv6 )?address (\S+)/g;
+    @addresses ? (0, @addresses) : 2;
+}
+
+=item _resolve($name)
+
+ Look the name up in the public DNS, the view Let's Encrypt has of it
+
+ Param string $name DNS name
+ Return (int, list) as _hostAddresses()
+
+=cut
+
+sub _resolve
+{
+    my ($self, $name) = @_;
+
+    execute( [ 'host', $name, '8.8.8.8' ], \my $stdout, \my $stderr );
+    _hostAddresses( $stdout );
+}
+
+=item _serverAddresses()
+
+ The addresses this server is reached on: those i-MSCP knows (its IPs, and the public IP it is
+ reached on from behind NAT) and those of its own network interfaces
+
+ Return list
+
+=cut
+
+sub _serverAddresses
+{
+    my $self = shift;
+    my @addresses;
+
+    my $rows = $self->{'db'}->doQuery( 'ip_number', 'SELECT ip_number FROM server_ips' );
+    push @addresses, keys %{$rows} if ref $rows eq 'HASH';
+    push @addresses, grep { defined && /\S/ } @main::imscpConfig{qw/ BASE_SERVER_PUBLIC_IP BASE_SERVER_IP /};
+
+    execute( [ 'ip', '-o', 'addr', 'show', 'scope', 'global' ], \my $stdout, \my $stderr );
+    push @addresses, ($stdout // '') =~ /\binet6? ([0-9A-Fa-f.:]+)/g;
+
+    @addresses;
+}
+
+=item _ipKey($address)
+
+ The address in a form two spellings of the same address compare equal in
+
+ Param string $address IPv4 or IPv6 address
+ Return string
+
+=cut
+
+sub _ipKey
+{
+    my ($address) = @_;
+
+    (my $plain = $address) =~ s/%.*//;
+    Socket::inet_pton( Socket::AF_INET(), $plain ) // Socket::inet_pton( Socket::AF_INET6(), $plain ) // lc $plain;
+}
+
+=item _foreignAddresses(\@resolved, \@ours)
+
+ The resolved addresses that are not this server's
+
+ Param arrayref $resolved Addresses a name resolves to
+ Param arrayref $ours Addresses of this server
+ Return list
+
+=cut
+
+sub _foreignAddresses
+{
+    my ($resolved, $ours) = @_;
+
+    my %ours = map { _ipKey( $_ ) => 1 } @{$ours};
+    grep { !$ours{_ipKey( $_ )} } @{$resolved};
+}
+
+=item _checkDNSEnabled()
+
+ Whether names are checked to point at this server before certbot is asked for them
+
+ On by default; check_dns_points_here => false in config.php turns it off, for a server reached
+ through a proxy or CDN whose addresses are not its own.
+
+ Return bool
+
+=cut
+
+sub _checkDNSEnabled
+{
+    my $self = shift;
+
+    my $config = ref $self->{'config'} eq 'HASH' ? $self->{'config'} : {};
+    !exists $config->{'check_dns_points_here'} || $config->{'check_dns_points_here'} ? 1 : 0;
+}
+
+=item _checkPointsHere($certName)
+
+ Check that the name resolves, and to this server, before certbot is asked for it
+
+ Let's Encrypt fails the challenge for a name that points elsewhere, and only allows a few failed
+ validations an hour, so such a request is reported against the domain without being made.
+
+ Param string $certName DNS name
+ Return int 0 when certbot can be asked for it, 1 (with the reason recorded) when not
+
+=cut
+
+sub _checkPointsHere
+{
+    my ($self, $certName) = @_;
+
+    my ($status, @resolved) = $self->_resolve( $certName );
+    return $self->_error( "Cannot resolve $certName: it does not exist in the public DNS" ) if $status == 1;
+    return $self->_error( "Cannot resolve $certName: the public DNS gave no address for it, or could not be reached" ) if $status != 0;
+    return 0 unless $self->_checkDNSEnabled();
+
+    my @foreign = _foreignAddresses( \@resolved, [ $self->_serverAddresses() ] );
+    return 0 unless @foreign;
+
+    my $here = $main::imscpConfig{'BASE_SERVER_PUBLIC_IP'};
+    $self->_error( sprintf(
+        '%s resolves to %s, which is not this server%s. Let\'s Encrypt would fail to validate it. '
+            . 'Point its DNS at this server, or wait for a change to reach the public DNS, then request the '
+            . 'certificate again.',
+        $certName, join( ', ', @foreign ), (defined $here && $here =~ /\S/ ? " ($here)" : '')
+    ) );
+}
+
+=item _wwwPointsElsewhere($certName)
+
+ Whether the www name of the domain definitely resolves somewhere other than this server
+
+ An unclear lookup is not taken as pointing elsewhere: www stays as _wantWWW() decided.
+
+ Param string $certName Primary name of the certificate
+ Return bool
+
+=cut
+
+sub _wwwPointsElsewhere
+{
+    my ($self, $certName) = @_;
+
+    return 0 unless $self->_checkDNSEnabled();
+    my ($status, @resolved) = $self->_resolve( "www.$certName" );
+    return 0 if $status != 0;
+    _foreignAddresses( \@resolved, [ $self->_serverAddresses() ] ) ? 1 : 0;
+}
+
+=item _certIsCurrent($certName, $haveWWW)
+
+ Whether the certificate certbot holds for the name can be used as it is
+
+ It must be certbot's (a usable renewal config), be for exactly the names that would be asked
+ for, and not be due for renewal. certbot would keep such a certificate anyway, but asking it
+ still talks to Let's Encrypt, and a network or Let's Encrypt outage would then fail a domain
+ that has a good certificate.
+
+ Param string $certName Primary name of the certificate
+ Param bool $haveWWW Whether the certificate is to carry the www name too
+ Return bool
+
+=cut
+
+sub _certIsCurrent
+{
+    my ($self, $certName, $haveWWW) = @_;
+
+    return 0 unless $self->_hasRenewalConf( $certName );
+    my $certFile = $self->_lineagePaths( $certName )->{'live'} . '/cert.pem';
+    return 0 unless -f $certFile;
+
+    my @want = sort map { lc } $certName, ($haveWWW ? "www.$certName" : ());
+    my @have = sort map { lc } _certNames( $certFile );
+    return 0 unless "@want" eq "@have";
+
+    my $rs = execute(
+        [ 'openssl', 'x509', '-in', $certFile, '-noout', '-checkend', RENEW_BEFORE ], \my $stdout, \my $stderr
+    );
+    $rs ? 0 : 1;
+}
+
 =item _addCertificate($domainId, $certName, $aliasId, $subdomainId)
 
  Adds LetsEncrypt SSL certificate to the given domain or alias
@@ -446,13 +651,32 @@ sub _addCertificate
         return $self->_error( "$certName is disabled: request its certificate again once it is enabled" );
     }
 
-    if (!$self->{'testmode'} && _lookup($certName) != 0) {
-        return $self->_error( "Cannot resolve $certName" );
-    }
-
     # A domain that was disabled has its renewal config parked; certbot needs it back to find the lineage (#42)
     my $rs = $self->_restoreRenewalConf( $certName );
     return $rs if $rs;
+
+    # www goes on the certificate when it resolves, but not when it points at another server: Let's
+    # Encrypt would fail the whole request for it
+    my $haveWWW = $self->{'testmode'} ? 0 : $self->_wantWWW(
+        _lookup( "www.$certName" ), $self->_lineagePaths( $certName )->{'live'} . '/cert.pem', "www.$certName"
+    );
+    $haveWWW = 0 if $haveWWW && $self->_wwwPointsElsewhere( $certName );
+
+    # The certificate certbot already holds will do: no need to ask Let's Encrypt, nor to look the
+    # domain up, so an outage of either cannot fail a domain whose certificate is good (#47)
+    if ($self->_certIsCurrent( $certName, $haveWWW )) {
+        debug( "$certName: the certificate certbot holds is current, certbot is not run" );
+        $rs = $self->_updateSelfSignedCertificate( $type, $id );
+        return $rs if $rs;
+        return $self->_triggerDomainOnChange( $type, $id );
+    }
+
+    # A name that does not point here cannot pass validation: say so rather than spend one of the few
+    # failed validations Let's Encrypt allows an hour on it (#45)
+    if (!$self->{'testmode'}) {
+        $rs = $self->_checkPointsHere( $certName );
+        return $rs if $rs;
+    }
 
     # A lineage certbot has no usable renewal config for would stop it saving the certificate under
     # $certName: hand it back to certbot if it can be, otherwise move it out of the way
@@ -467,10 +691,6 @@ sub _addCertificate
         $self->_restoreOrphanedLineage( $orphaned );
         return $rs;
     }
-
-    my $haveWWW = $self->{'testmode'} ? 0 : $self->_wantWWW(
-        _lookup( "www.$certName" ), $self->_lineagePaths( $certName )->{'live'} . '/cert.pem', "www.$certName"
-    );
 
     my %otherLineages = map { $_ => 1 } $self->_otherLineages( $certName );
 
@@ -1035,6 +1255,24 @@ sub _otherLineages
     map { s{^.*/}{}r } glob LETSENCRYPT_DIR . "/live/$certName-[0-9][0-9][0-9][0-9]";
 }
 
+=item _certNames($certFile)
+
+ The DNS names the certificate in the given file is for (its subjectAltName)
+
+ Param string $certFile PEM certificate
+ Return list, empty when there is no certificate or it cannot be read
+
+=cut
+
+sub _certNames
+{
+    my ($certFile) = @_;
+
+    return () unless -f $certFile;
+    my $rs = execute( [ 'openssl', 'x509', '-in', $certFile, '-noout', '-text' ], \my $stdout, \my $stderr );
+    $rs ? () : $stdout =~ /\bDNS:([^\s,]+)/g;
+}
+
 =item _certHasName($certFile, $name)
 
  Whether the certificate in the given file is for the given name
@@ -1049,9 +1287,7 @@ sub _certHasName
 {
     my ($certFile, $name) = @_;
 
-    return 0 unless -f $certFile;
-    my $rs = execute( [ 'openssl', 'x509', '-in', $certFile, '-noout', '-text' ], \my $stdout, \my $stderr );
-    !$rs && $stdout =~ /DNS:\Q$name\E(?![\w.-])/ ? 1 : 0;
+    (grep { lc $_ eq lc $name } _certNames( $certFile )) ? 1 : 0;
 }
 
 =item _wantWWW($lookup, $certFile, $wwwName)

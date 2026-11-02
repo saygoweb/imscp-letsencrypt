@@ -1,5 +1,18 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 2.1.7
+
+* Check that a domain points at this server before asking Let's Encrypt for its certificate (#45).
+  A name that resolves to any other address is reported against the domain, saying where it points,
+  instead of failing Let's Encrypt's validation and using up one of the few failed validations it
+  allows an hour. A `www.` name that points elsewhere is left off the certificate. The server's
+  addresses are its i-MSCP IPs, `BASE_SERVER_PUBLIC_IP` and those of its network interfaces; set
+  `check_dns_points_here` to `false` in `config.php` for sites reached through a proxy or CDN.
+* Use the certificate certbot already holds when it is for exactly the names wanted and is not due
+  for renewal (#47). certbot is not run and the domain is not looked up, so a network or Let's
+  Encrypt outage no longer fails a domain whose certificate is good. A certificate within 30 days
+  of expiry, or for different names, still goes through certbot.
+
 ## Version 2.1.6
 
 * Remove the LetsEncrypt entry from the reseller panel (#20). The plugin has no reseller features,

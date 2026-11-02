@@ -38,6 +38,15 @@ you plan to upload using the plugin management interface.
 1. Upload the plugin through the plugin management interface
 2. Install the plugin through the plugin management interface
 
+## Configuration
+
+`config.php` holds the plugin's settings. Change them there, then update the plugin through the plugin
+management interface.
+
+| Setting | Default | |
+|---|---|---|
+| `check_dns_points_here` | `true` | Before asking Let's Encrypt for a certificate, check that the domain resolves to this server (its i-MSCP IPs, `BASE_SERVER_PUBLIC_IP`, or a network interface address), and report it against the domain when it does not. A `www.` name pointing elsewhere is left off the certificate. Set it to `false` when sites are reached through a proxy or CDN. |
+
 ## Building
 
 Packaging is driven by [phpmake](https://github.com/saygoweb/phpmake), which reads the targets from

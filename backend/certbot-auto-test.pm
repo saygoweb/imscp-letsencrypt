@@ -18,12 +18,16 @@
 # delete removes the lineage, or fails when there is no renewal config for it.
 #
 # A renewal config holds a lineage when its cert = line names a file that is
-# there; certbot skips one it cannot load. Two knobs for the tests:
+# there; certbot skips one it cannot load. Certificates carry every -d name in
+# their subjectAltName, as Let's Encrypt's do. Knobs for the tests:
 #   CERTBOT_MOCK_APACHE_CONF_DIR  vhosts to check first, the way certbot --apache
 #                                 runs apache2ctl configtest: certonly fails when
 #                                 one names an SSL file that is not there.
 #   CERTBOT_MOCK_NEW_LINEAGE      ignore the renewal config, as certbot does with
 #                                 one it cannot load, and start a new lineage.
+#   CERTBOT_MOCK_DAYS             how long a new certificate is valid, default 3650.
+#   CERTBOT_MOCK_LOG              a file each invocation appends its arguments to,
+#                                 one line per run.
 
 use strict;
 use warnings;
@@ -33,6 +37,12 @@ use File::Path qw/ make_path remove_tree /;
 use Getopt::Long;
 
 my $LE = '/etc/letsencrypt';
+
+if (my $log = $ENV{'CERTBOT_MOCK_LOG'}) {
+    open my $lfh, '>>', $log or die "certbot-auto-test: $log: $!\n";
+    print $lfh join( ' ', @ARGV ), "\n";
+    close $lfh;
+}
 
 my $action = shift @ARGV // '';
 my ($certName, @domains);
@@ -83,7 +93,8 @@ if ($action eq 'certonly') {
     run( 'openssl', 'genrsa', '-out', "$archive/privkey1.pem", '2048' );
     run(
         'openssl', 'req', '-x509', '-new', '-key', "$archive/privkey1.pem", '-subj', "/CN=$domains[0]",
-        '-days', '3650', '-out', "$archive/cert1.pem"
+        '-addext', 'subjectAltName=' . join( ',', map { "DNS:$_" } @domains ),
+        '-days', $ENV{'CERTBOT_MOCK_DAYS'} // '3650', '-out', "$archive/cert1.pem"
     );
     for my $copy (qw/ chain fullchain /) {
         copy( "$archive/cert1.pem", "$archive/${copy}1.pem" ) or die "certbot-auto-test: copy: $!\n";
