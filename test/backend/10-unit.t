@@ -132,8 +132,21 @@ my $cmd = $plugin->_certbotCommand( 'a.test', 0 );
 like( $cmd, qr/^certbot certonly /, 'certbot is asked for a certificate' );
 like( $cmd, qr/ --cert-name '?a\.test'?(?: |$)/, 'in the lineage named after the domain, which the vhost points at' );
 like( $cmd, qr/ -d '?a\.test'?(?: |$)/, 'for the domain' );
-unlike( $cmd, qr/www/, 'alone when its www name does not resolve' );
+unlike( $cmd, qr/www\./, 'alone when its www name does not resolve' );
 like( $plugin->_certbotCommand( 'a.test', 1 ), qr/ --expand -d '?www\.a\.test'?$/, 'and with its www name when it does' );
+
+# The challenge is answered from the webroot, which the plugin's Apache conf
+# serves on every vhost. certbot's Apache plugin parsed the whole Apache config
+# for each certificate - minutes of CPU on a server with hundreds of vhosts -
+# and reloaded Apache several times over.
+$plugin->{'webroot'} = '/srv/le-webroot';
+$cmd = $plugin->_certbotCommand( 'a.test', 1 );
+like( $cmd, qr/ certonly --webroot -w '?\/srv\/le-webroot'? /, 'with the webroot authenticator, from the webroot' );
+unlike( $cmd, qr/--apache|--installer|(?:^| )-i /, "and neither certbot's Apache plugin nor any installer" );
+like( $cmd, qr/ -w \S+ .*-d '?a\.test'?/, 'the webroot coming before the names it is for' );
+delete $plugin->{'webroot'};
+like( $plugin->_certbotCommand( 'a.test', 0 ), qr/ -w '?\/var\/www\/sgw-letsencrypt'? /,
+    'the webroot is /var/www/sgw-letsencrypt unless told otherwise' );
 
 # --- _wantWWW -------------------------------------------------------------------
 # With --cert-name, certbot reissues the lineage for exactly the names it is

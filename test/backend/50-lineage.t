@@ -154,8 +154,9 @@ ok( !-e "$LE/$_", "$_ goes" ) for "live/$name", "archive/$name";
 # --- a lineage an earlier plugin left orphaned -----------------------------------
 # Up to 2.1.4 disabling or deleting removed only the renewal config, and a failed
 # certbot 5.9 run leaves an empty one. Servers have such lineages today, mostly
-# for sites that are up and serving the certificate from live/<name>: certbot
-# --apache runs apache2ctl configtest first, so live/<name> must stay where it is.
+# for sites that are up and serving the certificate from live/<name>: Apache
+# fails to reload while a vhost names a file that is not there, so live/<name>
+# must stay where it is.
 
 my $vhosts = File::Temp->newdir();
 local $ENV{'CERTBOT_MOCK_APACHE_CONF_DIR'} = $vhosts->dirname;
@@ -213,7 +214,9 @@ for my $case (
     my $account = "mockaccount$$";
     like( $conf, qr{^account = \Q$account\E$}m, 'with the account the other lineages use' );
     like( $conf, qr{^server = https://acme-staging-v02\.api\.letsencrypt\.org/directory$}m, 'and their server' );
-    like( $conf, qr{^authenticator = apache$}m, 'through apache' );
+    like( $conf, qr{^authenticator = webroot\nwebroot_path = \Q$plugin->{'webroot'}\E,$}m, 'through the webroot' );
+    like( $conf, qr{^\[\[webroot_map\]\]\n\Q$name\E = \Q$plugin->{'webroot'}\E$}m, 'for its names' );
+    unlike( $conf, qr{^installer}m, 'with no installer' );
     like( $conf, qr{^key_type = rsa$}m, 'for the key it has' );
     is( scalar( () = glob "$LE/orphaned/$name-*" ), 0, 'with nothing moved aside' );
     unlink $site;
@@ -326,7 +329,9 @@ isnt( le_row( $le )->{'status'}, 'tochange', 'the request is not left queued' );
 # no rebuild coming, removing the files would leave httpd a vhost it cannot load.
 
 $name = test_name( 'norebuild' );
-system( $plugin->{'certbotTest'}, 'certonly', '--cert-name', $name, '-d', $name ) == 0 or die 'mock certbot failed';
+system(
+    $plugin->{'certbotTest'}, 'certonly', '--webroot', '-w', $plugin->{'webroot'}, '--cert-name', $name, '-d', $name
+) == 0 or die 'mock certbot failed';
 $le = fixture_letsencrypt( type => 'dmn', id => 0, cert_name => $name, status => 'todelete' );
 is( $plugin->run(), 0, 'a delete for a domain that cannot be rebuilt runs' );
 is( le_row( $le )->{'status'}, 'error', 'and fails' );

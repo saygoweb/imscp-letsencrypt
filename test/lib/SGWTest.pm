@@ -17,11 +17,12 @@ use warnings;
 use Cwd qw/ abs_path /;
 use File::Basename qw/ dirname /;
 use File::Path qw/ remove_tree /;
+use File::Temp;
 use Test::More;
 use Exporter 'import';
 
 our @EXPORT_OK = qw/
-    plugin_root engine_dir require_root load_plugin boot plugin shadow_tables create_letsencrypt_table
+    plugin_root sandbox engine_dir require_root load_plugin boot plugin shadow_tables create_letsencrypt_table
     fixture_domain fixture_letsencrypt fixture_ssl_cert row rows test_name cleanup_path cleanup_dir
 /;
 
@@ -38,10 +39,14 @@ for my $dir (reverse $ENGINE_LIB, "$ENGINE_DIR/PerlVendor") {
 }
 
 my @cleanupPaths;
+
+# A directory of the test's own, removed when it ends: see plugin()
+my $SANDBOX = File::Temp->newdir( 'sgw-le-XXXXXX', TMPDIR => 1 );
 my @cleanupDirs;
 my $connectionId;
 
 sub plugin_root { $ROOT }
+sub sandbox { "$SANDBOX" }
 sub engine_dir { $ENGINE_DIR }
 
 =item require_root()
@@ -111,6 +116,13 @@ sub plugin
     my $plugin = Plugin::SGW_LetsEncrypt->getInstance();
     $plugin->{'testmode'} = 1;
     $plugin->{'certbotTest'} = "$ROOT/backend/certbot-auto-test.pm";
+    # What the plugin installs on the host goes under a directory of the test's own
+    $plugin->{'webroot'} = "$SANDBOX/webroot";
+    $plugin->{'deployHook'} = "$SANDBOX/renewal-hooks/deploy/40-sgw-letsencrypt";
+    $plugin->{'postHook'} = "$SANDBOX/renewal-hooks/post/50-sgw-letsencrypt";
+    $plugin->{'reloadFlag'} = "$SANDBOX/reload";
+    $plugin->{'renewalBackupDir'} = "$SANDBOX/renewal-backup";
+    mkdir $plugin->{'webroot'};
     $plugin;
 }
 

@@ -1,5 +1,31 @@
 # iMSCP LetsEncrypt Plugin - Changelog
 
+## Version 2.2.0
+
+* Answer the http-01 challenge from a webroot instead of through certbot's Apache plugin. The Apache
+  plugin parsed the whole Apache configuration for each certificate and reloaded Apache three times
+  per certificate: on a server with hundreds of vhosts that was about three minutes of CPU per
+  certificate, enough to overload the server during a renewal run. Certificates are now requested
+  with `certbot certonly --webroot -w /var/www/sgw-letsencrypt` and no installer.
+* The plugin installs `sgw_letsencrypt.conf` in Apache's `conf-available/` and enables it. It serves
+  `/.well-known/acme-challenge/` from the webroot on every vhost. i-MSCP's redirect and proxy
+  forwards already leave that path out, so forwarded domains are served too. The webroot is outside
+  every document root, so customer `.htaccess` rules do not apply to it.
+* Existing certificates are migrated on update. The renewal configs of the plugin's lineages (in
+  `renewal/` and, for disabled domains, `renewal-disabled/`) that still use the Apache plugin are
+  switched to `authenticator = webroot`, with `webroot_path` and a `[[webroot_map]]` for each name on
+  the certificate, and their `installer` line is removed. Each config is first copied as it was to
+  `/etc/letsencrypt/renewal-backup/<time>/`. Lineages the plugin does not manage are left alone, and
+  running the migration again changes nothing.
+* With no installer, certbot no longer reloads Apache after a renewal. Two renewal hooks do it
+  instead: `renewal-hooks/deploy/40-sgw-letsencrypt` raises a flag for each renewed certificate,
+  and `renewal-hooks/post/50-sgw-letsencrypt` reloads Apache once at the end of the run when the
+  flag is up.
+* Uninstalling removes the Apache conf, the webroot and the hooks. As before, certificates and
+  their renewal configs are kept.
+* To roll back, install 2.1.9 again and copy the configs from the backup back into
+  `/etc/letsencrypt/` (for example `cp -a /etc/letsencrypt/renewal-backup/<time>/. /etc/letsencrypt/`).
+
 ## Version 2.1.9
 
 * Deleting or disabling a domain, alias or subdomain that has a Let's Encrypt certificate deletes or

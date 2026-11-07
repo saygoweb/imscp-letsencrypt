@@ -51,6 +51,22 @@ use constant ERROR_MAX_LENGTH => 1000;
 # Where certbot keeps its lineages: live/<name>/, archive/<name>/, renewal/<name>.conf
 use constant LETSENCRYPT_DIR => '/etc/letsencrypt';
 
+# certbot's webroot for the http-01 challenge. Every vhost serves its challenge directory through the
+# Alias in APACHE_CONF, so certbot never touches the Apache configuration.
+use constant WEBROOT_DIR => '/var/www/sgw-letsencrypt';
+
+# The Apache conf, under conf-available/, that serves WEBROOT_DIR on every vhost
+use constant APACHE_CONF => 'sgw_letsencrypt.conf';
+
+# certbot runs these on renew: the deploy hook for each certificate renewed, the post hook once at the end
+# of the run. Together they reload Apache once a run, and only when something was renewed.
+use constant DEPLOY_HOOK => LETSENCRYPT_DIR . '/renewal-hooks/deploy/40-sgw-letsencrypt';
+use constant POST_HOOK => LETSENCRYPT_DIR . '/renewal-hooks/post/50-sgw-letsencrypt';
+use constant RELOAD_FLAG => '/run/sgw-letsencrypt.reload';
+
+# Where renewal configs are kept as they were before the plugin rewrote them for webroot
+use constant RENEWAL_BACKUP_DIR => LETSENCRYPT_DIR . '/renewal-backup';
+
 # Messages for the client, reported against the domain (see _error)
 use constant DNS_MISSING => '%s cannot be found in the public DNS. If you have just registered it or changed its DNS, '
     . 'wait for the change to reach the public DNS (this can take a few hours), then try again.';
@@ -310,6 +326,12 @@ sub _init
     # The mock run in testmode. Tests point this at the checkout under test, which need not be
     # the copy installed in the panel's plugins directory.
     $self->{'certbotTest'} = $main::imscpConfig{'PLUGINS_DIR'}.'/SGW_LetsEncrypt/backend/certbot-auto-test.pm';
+
+    # Tests point these elsewhere, so as not to touch the host's real configuration
+    $self->{'webroot'} = WEBROOT_DIR;
+    $self->{'deployHook'} = DEPLOY_HOOK;
+    $self->{'postHook'} = POST_HOOK;
+    $self->{'reloadFlag'} = RELOAD_FLAG;
 
     $self->{'db'} = iMSCP::Database->factory();
     $self->{'httpd'} = Servers::httpd->factory();
@@ -1151,10 +1173,10 @@ sub _deleteLineage
 
  Up to 2.1.4 disabling or deleting removed only the renewal config (#40, #42), so servers have
  sites serving live/<certName> that certbot no longer renews. The lineage cannot be moved out of
- the way for a new one: certbot --apache runs apache2ctl configtest first, which fails while a
- vhost names a file that is not there. So when live/ is laid out the way certbot lays it out -
- each file a link into archive/<certName>/ - a renewal config is written for it, with the
- account and server of another lineage certbot knows. certbot then keeps or renews it in place.
+ the way for a new one: Apache fails to reload while a vhost names a file that is not there. So
+ when live/ is laid out the way certbot lays it out - each file a link into archive/<certName>/ -
+ a renewal config is written for it, with the account and server of another lineage certbot
+ knows. certbot then keeps or renews it in place.
 
  Param string $certName Primary name of the certificate
  Return int 0 on success or when there is nothing that can be adopted, other on failure
@@ -1200,10 +1222,11 @@ sub _adoptOrphanedLineage
         . join( '', map { "$_ = $file{$_}\n" } qw/ cert privkey chain fullchain / )
         . "\n[renewalparams]\n"
         . (defined $account ? "account = $account\n" : '')
-        . "authenticator = apache\n"
-        . "installer = None\n"
+        . "authenticator = webroot\n"
+        . "webroot_path = " . $self->_webroot() . ",\n"
         . "server = $server\n"
-        . "key_type = $keyType\n";
+        . "key_type = $keyType\n"
+        . _webrootMap( $self->_webroot(), _certNames( $file{'cert'} ) );
 
     make_path( dirname( $paths->{'renewal'} ) );
     my $tmp = "$paths->{'renewal'}.tmp-$$";
@@ -1393,6 +1416,12 @@ sub _certbot
  --cert-name pins the lineage to the name the vhost points at, live/<certName>/. Left to
  itself certbot picks <certName>-0001 when it cannot match a lineage (#40).
 
+ The challenge is answered from the webroot, which every vhost serves through the plugin's Apache
+ conf. certbot's Apache plugin would parse the whole Apache configuration for each certificate
+ and reload Apache several times over: on a server with hundreds of vhosts that is minutes of CPU
+ a certificate. No installer is needed either: i-MSCP writes the vhosts, pointing them at
+ live/<certName>/, and the domain is rebuilt once the certificate is there.
+
  Param string $certName Primary name of the certificate / domain
  Param bool $haveWWW Whether to include www.<certName>
  Return string
@@ -1404,10 +1433,24 @@ sub _certbotCommand
     my ($self, $certName, $haveWWW) = @_;
 
     my $command = $self->_certbot()
-        . ' certonly --apache --no-bootstrap --non-interactive -v --cert-name ' . escapeShell( $certName )
+        . ' certonly --webroot -w ' . escapeShell( $self->_webroot() )
+        . ' --no-bootstrap --non-interactive -v --cert-name ' . escapeShell( $certName )
         . ' -d ' . escapeShell( $certName );
     $command .= ' --expand -d ' . escapeShell( "www.$certName" ) if $haveWWW;
     $command;
+}
+
+=item _webroot()
+
+ Return the directory certbot answers the http-01 challenge from
+
+=cut
+
+sub _webroot
+{
+    my $self = shift;
+
+    $self->{'webroot'} // WEBROOT_DIR;
 }
 
 =item _onAfterHttpdBuildConf($cfgTpl, $filename, $data)
@@ -1574,7 +1617,15 @@ EOF
 
 =item _letsencryptConfig($action)
 
- Configure or deconfigure LetsEncrypt
+ Configure or deconfigure certbot's use of the webroot
+
+ configure, on install and on every update: the webroot and the Apache conf serving it on every
+ vhost, the renewal hooks reloading Apache, and the renewal configs of the plugin's lineages
+ rewritten from certbot's Apache plugin to the webroot. Each step leaves alone what is already as
+ it should be, so running it again changes nothing.
+
+ deconfigure, on uninstall: the Apache conf, the webroot and the hooks go. The certificates and
+ their renewal configs stay, as they always have.
 
  Param string $action Action to perform ( configure|deconfigure )
  Return int 0 on success, other on failure
@@ -1585,23 +1636,418 @@ sub _letsencryptConfig
 {
     my ($self, $action) = @_;
 
-    # /etc/default/letsencrypt configuration file
-    # my $file = iMSCP::File->new( filename => '/etc/default/letsencrypt' );
-    # my $fileContent = $file->get();
-    # unless (defined $fileContent) {
-    #     error( sprintf( 'Could not read %s file', $file->{'filename'} ) );
-    #     return 1;
-    # }
-
     if ($action eq 'configure') {
-    } elsif ($action eq 'deconfigure') {
-        # $fileContent = replaceBloc( "# Begin Plugin::LetsEncrypt\n", "# Ending Plugin::LetsEncrypt\n", '', $fileContent );
+        my $rs = $self->_installApacheConf();
+        $rs ||= $self->_installRenewalHooks();
+        # Last: the configs it rewrites need the Apache conf in place to renew
+        $rs ||= $self->_migrateRenewalConfs();
+        return $rs;
     }
 
-    # my $rs = $file->set( $fileContent );
-    # $rs ||= $file->save();
-    # return $rs if $rs;
+    if ($action eq 'deconfigure') {
+        my $rs = $self->_removeRenewalHooks();
+        $rs ||= $self->_removeApacheConf();
+        return $rs;
+    }
 
+    0;
+}
+
+=item _apacheConfContent($webroot)
+
+ The Apache conf serving the http-01 challenge from the webroot, on every vhost
+
+ An Alias in the server config applies to every vhost that has none of its own for the path.
+ i-MSCP's vhosts leave the challenge path out of their redirects and proxies, so the forwarded
+ ones serve it too. The webroot is outside every document root, so no customer .htaccess applies
+ to it, and none is read in it.
+
+ Param string $webroot Directory certbot is given with --webroot-path
+ Return string
+
+=cut
+
+sub _apacheConfContent
+{
+    my ($webroot) = @_;
+
+    my $dir = "$webroot/.well-known/acme-challenge";
+    <<"EOF";
+# Installed by the i-MSCP SGW_LetsEncrypt plugin, which removes it on uninstall.
+# certbot answers the http-01 challenge of every certificate from $webroot
+# (certbot certonly --webroot), so the challenge path is served on every vhost.
+Alias "/.well-known/acme-challenge/" "$dir/"
+<Directory "$dir">
+    Options None
+    AllowOverride None
+    ForceType text/plain
+    Require all granted
+</Directory>
+EOF
+}
+
+=item _apacheConfFile()
+
+ Return the path of the plugin's Apache conf, under conf-available/
+
+=cut
+
+sub _apacheConfFile
+{
+    my $self = shift;
+
+    "$self->{'httpd'}->{'config'}->{'HTTPD_CONF_DIR'}/conf-available/" . APACHE_CONF;
+}
+
+=item _installApacheConf()
+
+ Create the webroot, and serve it on every vhost
+
+ Apache is reloaded, by i-MSCP once the plugin is done, only when the conf is new or changed.
+
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _installApacheConf
+{
+    my $self = shift;
+    my $webroot = $self->_webroot();
+
+    make_path( "$webroot/.well-known/acme-challenge", { mode => 0755, error => \my $errors } );
+    return $self->_error( "Could not create $webroot/.well-known/acme-challenge: "
+        . join( ', ', map { values %{$_} } @{$errors} ) ) if @{$errors};
+    chmod 0755, $webroot, "$webroot/.well-known", "$webroot/.well-known/acme-challenge";
+
+    my $file = $self->_apacheConfFile();
+    my $content = _apacheConfContent( $webroot );
+    my $enabled = dirname( dirname( $file ) ) . '/conf-enabled/' . APACHE_CONF;
+    return 0 if (_slurp( $file ) // '') eq $content && -e $enabled;
+
+    my $rs = _writeFile( $file, $content, 0644 );
+    return $self->_error( $rs ) if $rs;
+    $rs = $self->{'httpd'}->enableConfs( APACHE_CONF );
+    return $self->_error( "Could not enable the Apache conf " . APACHE_CONF ) if $rs;
+    # Changed but already enabled, enableConfs may not have asked for the reload
+    $self->{'httpd'}->{'restart'} = 1;
+
+    0;
+}
+
+=item _removeApacheConf()
+
+ Undo _installApacheConf()
+
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _removeApacheConf
+{
+    my $self = shift;
+
+    my $file = $self->_apacheConfFile();
+    if (-e $file) {
+        my $rs = $self->{'httpd'}->disableConfs( APACHE_CONF );
+        return $self->_error( "Could not disable the Apache conf " . APACHE_CONF ) if $rs;
+        unlink $file or return $self->_error( "Could not remove $file: $!" );
+    }
+
+    my $webroot = $self->_webroot();
+    remove_tree( $webroot ) if -d $webroot;
+
+    0;
+}
+
+=item _renewalHooks()
+
+ The renewal hooks the plugin installs: { path => content }
+
+ With no installer, certbot renew does not reload Apache, which goes on serving the old
+ certificates. The deploy hook, run for each certificate renewed, raises a flag; the post hook,
+ run once at the end of the run, reloads Apache when the flag is up. So a run reloads Apache once
+ however many certificates it renews, and not at all when it renews none. certbot runs these
+ hooks on renew only: a certificate the plugin requests gets its vhost rebuilt instead.
+
+ Return hashref
+
+=cut
+
+sub _renewalHooks
+{
+    my $self = shift;
+
+    my $flag = $self->{'reloadFlag'} // RELOAD_FLAG;
+    my $service = ref $self->{'httpd'} && $self->{'httpd'}->{'config'}->{'HTTPD_SNAME'} || 'apache2';
+    my $header = "#!/bin/sh\n# Installed by the i-MSCP SGW_LetsEncrypt plugin, which removes it on uninstall.\n";
+
+    return {
+        ($self->{'deployHook'} // DEPLOY_HOOK) => $header . <<"EOF",
+# A certificate was renewed: have the post hook reload Apache once the run is over.
+touch '$flag'
+EOF
+        ($self->{'postHook'} // POST_HOOK) => $header . <<"EOF",
+# Reload Apache once, at the end of a renew run that renewed a certificate, so that it serves the
+# renewed certificates. certbot renews with the webroot and no installer, so nothing else does.
+[ -e '$flag' ] || exit 0
+rm -f '$flag'
+if [ -d /run/systemd/system ]; then
+    exec systemctl reload '$service'
+fi
+exec service '$service' reload
+EOF
+    };
+}
+
+=item _installRenewalHooks()
+
+ Install the hooks of _renewalHooks()
+
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _installRenewalHooks
+{
+    my $self = shift;
+
+    my $hooks = $self->_renewalHooks();
+    for my $path (sort keys %{$hooks}) {
+        next if (_slurp( $path ) // '') eq $hooks->{$path} && -x $path;
+        make_path( dirname( $path ), { mode => 0755 } );
+        my $rs = _writeFile( $path, $hooks->{$path}, 0755 );
+        return $self->_error( $rs ) if $rs;
+    }
+
+    0;
+}
+
+=item _removeRenewalHooks()
+
+ Undo _installRenewalHooks()
+
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _removeRenewalHooks
+{
+    my $self = shift;
+
+    for my $path (sort keys %{$self->_renewalHooks()}) {
+        next unless -e $path;
+        unlink $path or return $self->_error( "Could not remove $path: $!" );
+    }
+
+    0;
+}
+
+=item _webrootMap($webroot, @domains)
+
+ The [[webroot_map]] subsection of a renewal config, sending every name to the webroot
+
+ Return string, empty when there are no names
+
+=cut
+
+sub _webrootMap
+{
+    my ($webroot, @domains) = @_;
+
+    my %seen;
+    @domains = grep { !$seen{lc $_}++ } @domains;
+    return '' unless @domains;
+    "[[webroot_map]]\n" . join( '', map { "$_ = $webroot\n" } @domains );
+}
+
+=item _webrootRenewalConf($content, $webroot, @domains)
+
+ Rewrite a renewal config of certbot's Apache plugin for the webroot
+
+ In [renewalparams], authenticator = apache becomes webroot, with webroot_path and a
+ [[webroot_map]] for the given names, and the installer goes: i-MSCP writes the vhosts, and the
+ post hook reloads Apache. Everything else is kept as it is. certbot reads the file with
+ configobj, where a [[subsection]] runs to the next section, so webroot_path goes up by
+ authenticator, before any subsection, and the map goes at the end of [renewalparams].
+
+ Param string $content The renewal config
+ Param string $webroot Directory the challenge is answered from
+ Param list @domains Names the certificate is for
+ Return string The new config, or undef when it is not one of the Apache plugin's
+
+=cut
+
+sub _webrootRenewalConf
+{
+    my ($content, $webroot, @domains) = @_;
+
+    my @lines = split /^/m, $content;
+    $lines[-1] .= "\n" if @lines && $lines[-1] !~ /\n$/;
+
+    my ($section, $sub) = ('', undef);
+    my @parsed;
+    for my $line (@lines) {
+        if ($line =~ /^\s*\[\[\s*([^\]]*?)\s*\]\]\s*$/) {
+            $sub = $1;
+        } elsif ($line =~ /^\s*\[\s*([^\[\]]*?)\s*\]\s*$/) {
+            ($section, $sub) = ($1, undef);
+        }
+        push @parsed, [ $line, $section, $sub ];
+    }
+
+    my $key = sub {
+        my ($entry) = @_;
+        my ($line, $section, $sub) = @{$entry};
+        return undef unless $section eq 'renewalparams' && !defined $sub;
+        my ($k, $v) = $line =~ /^\s*([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$/ or return undef;
+        $v =~ s/^(["'])(.*)\1$/$2/;
+        ($k, $v);
+    };
+
+    return undef unless grep { my ($k, $v) = $key->( $_ ); defined $k && $k eq 'authenticator' && $v eq 'apache' }
+        @parsed;
+
+    my $map = _webrootMap( $webroot, @domains );
+    my $out = '';
+    my $mapDone = 0;
+    for my $i (0 .. $#parsed) {
+        my ($line, $section, $sub) = @{$parsed[$i]};
+        my ($k) = $key->( $parsed[$i] );
+
+        if ($section eq 'renewalparams' && defined $sub && $sub eq 'webroot_map') {
+            # A map left from an earlier authenticator is replaced by the one below
+        } elsif (defined $k && $k eq 'authenticator') {
+            $out .= "authenticator = webroot\nwebroot_path = $webroot,\n";
+        } elsif (defined $k && ($k eq 'installer' || $k eq 'webroot_path')) {
+            # dropped
+        } else {
+            $out .= $line;
+        }
+
+        my $next = $parsed[$i + 1];
+        if (!$mapDone && $section eq 'renewalparams' && (!$next || $next->[1] ne 'renewalparams')) {
+            $out .= $map;
+            $mapDone = 1;
+        }
+    }
+
+    $out;
+}
+
+=item _managedCertNames()
+
+ The certificates the plugin manages: those of its letsencrypt rows
+
+ Return arrayref, or undef (with the error recorded) when the table cannot be read
+
+=cut
+
+sub _managedCertNames
+{
+    my $self = shift;
+
+    my $rows = $self->{'db'}->doQuery( 'cert_name', 'SELECT DISTINCT cert_name FROM letsencrypt' );
+    unless (ref $rows eq 'HASH') {
+        $self->_error( "Could not read the letsencrypt table: $rows" );
+        return undef;
+    }
+    [ sort grep { defined && /\S/ } keys %{$rows} ];
+}
+
+=item _migrateRenewalConfs()
+
+ Rewrite the renewal configs of the plugin's lineages from certbot's Apache plugin to the webroot
+
+ Up to 2.1.9 certificates were requested with --apache, and certbot renews each the way it was
+ requested. Only the lineages of the plugin's rows are touched - in renewal/ and, for disabled
+ domains, renewal-disabled/ - and only those still on the Apache plugin, so running it again
+ changes nothing. Each config is copied as it was to renewal-backup/<time>/ first; copying them
+ back to renewal/ is the way back.
+
+ Return int 0 on success, other on failure
+
+=cut
+
+sub _migrateRenewalConfs
+{
+    my $self = shift;
+
+    my $names = $self->_managedCertNames() or return 1;
+
+    my $backup = ($self->{'renewalBackupDir'} // RENEWAL_BACKUP_DIR) . '/' . strftime( '%Y%m%d%H%M%S', localtime );
+    my ($rs, $count) = (0, 0);
+    for my $name (@{$names}) {
+        my $paths = $self->_lineagePaths( $name );
+        for my $kind (qw/ renewal parked /) {
+            my $conf = $paths->{$kind};
+            next unless -f $conf;
+            my $content = _slurp( $conf );
+            next unless defined $content;
+
+            my ($cert) = $content =~ /^\s*cert\s*=\s*(\S+)/m;
+            my @domains = defined $cert ? _certNames( $cert ) : ();
+            @domains = ($name) unless @domains;
+            my $new = _webrootRenewalConf( $content, $self->_webroot(), @domains );
+            next unless defined $new;
+
+            my $saved = $backup . substr( $conf, length LETSENCRYPT_DIR );
+            make_path( dirname( $saved ), { mode => 0700 } );
+            my $error = _writeFile( $saved, $content, 0600 );
+            $error ||= _writeFile( $conf, $new, (stat $conf)[2] & 07777 );
+            if ($error) {
+                $self->_error( $error );
+                $rs = 1;
+                next;
+            }
+            $count++;
+        }
+    }
+
+    debug( "Rewrote $count renewal configs for the webroot; the originals are in $backup" ) if $count;
+    $rs;
+}
+
+=item _slurp($file)
+
+ Return the content of the file, undef when it cannot be read
+
+=cut
+
+sub _slurp
+{
+    my ($file) = @_;
+
+    open my $fh, '<', $file or return undef;
+    local $/;
+    <$fh> // '';
+}
+
+=item _writeFile($file, $content, $mode)
+
+ Write the file in one go: to a temporary file beside it, moved over it
+
+ Return string The error, empty on success
+
+=cut
+
+sub _writeFile
+{
+    my ($file, $content, $mode) = @_;
+
+    my $tmp = "$file.tmp-$$";
+    my $fh;
+    unless (open( $fh, '>', $tmp ) && print( $fh $content ) && close( $fh ) && chmod( $mode, $tmp )) {
+        my $error = "Could not write $tmp: $!";
+        unlink $tmp;
+        return $error;
+    }
+    unless (rename $tmp, $file) {
+        my $error = "Could not move $tmp to $file: $!";
+        unlink $tmp;
+        return $error;
+    }
+
+    '';
 }
 
 =item _checkRequirements()

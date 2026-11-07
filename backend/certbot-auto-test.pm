@@ -4,7 +4,7 @@
 # symlinks into it, renewal/<name>.conf - with self-signed certificates, so the
 # plugin's handling of them can be tested without asking Let's Encrypt.
 #
-#   certbot-auto-test.pm certonly [--cert-name NAME] -d DOMAIN [--expand -d DOMAIN]... [flags]
+#   certbot-auto-test.pm certonly --webroot -w DIR [--cert-name NAME] -d DOMAIN [--expand -d DOMAIN]... [flags]
 #   certbot-auto-test.pm delete --non-interactive --cert-name NAME
 #
 # certonly, like certbot:
@@ -14,15 +14,18 @@
 #     that does not exist yet, which it creates empty first, and fails with
 #     CertStorageError if archive/ or live/ already holds that name - leaving
 #     the empty config behind, as certbot 5.9 does (issue #42);
-#   - fails, as if the domain did not resolve, for any domain under .fail.local.
+#   - fails, as if the domain did not resolve, for any domain under .fail.local;
+#   - fails when not given --webroot and a -w directory that is there, as
+#     certbot's webroot plugin does, or when given --apache: the plugin no
+#     longer uses certbot's Apache plugin, which parses the whole Apache config.
 # delete removes the lineage, or fails when there is no renewal config for it.
 #
 # A renewal config holds a lineage when its cert = line names a file that is
 # there; certbot skips one it cannot load. Certificates carry every -d name in
 # their subjectAltName, as Let's Encrypt's do. Knobs for the tests:
-#   CERTBOT_MOCK_APACHE_CONF_DIR  vhosts to check first, the way certbot --apache
-#                                 runs apache2ctl configtest: certonly fails when
-#                                 one names an SSL file that is not there.
+#   CERTBOT_MOCK_APACHE_CONF_DIR  vhosts to check first, standing in for Apache,
+#                                 which fails to reload while one names an SSL file
+#                                 that is not there: certonly fails when one does.
 #   CERTBOT_MOCK_NEW_LINEAGE      ignore the renewal config, as certbot does with
 #                                 one it cannot load, and start a new lineage.
 #   CERTBOT_MOCK_DAYS             how long a new certificate is valid, default 3650.
@@ -45,20 +48,27 @@ if (my $log = $ENV{'CERTBOT_MOCK_LOG'}) {
 }
 
 my $action = shift @ARGV // '';
-my ($certName, @domains);
+my ($certName, @domains, $webroot, $useWebroot, $useApache);
 GetOptions(
-    'cert-name=s' => \$certName,
-    'domain|d=s'  => \@domains,
-    map { $_ => sub {} } qw/ apache no-bootstrap non-interactive no-self-update verbose|v expand /
+    'cert-name=s'      => \$certName,
+    'domain|d=s'       => \@domains,
+    'webroot'          => \$useWebroot,
+    'webroot-path|w=s' => \$webroot,
+    'apache'           => \$useApache,
+    map { $_ => sub {} } qw/ no-bootstrap non-interactive no-self-update verbose|v expand /
 ) or die "certbot-auto-test: unknown option\n";
 
 if ($action eq 'certonly') {
     @domains or die "certbot-auto-test: certonly needs -d\n";
+    die "certbot-auto-test: --apache is not to be used\n" if $useApache;
+    $useWebroot or die "certbot-auto-test: certonly needs --webroot\n";
+    defined $webroot && -d $webroot or die "certbot-auto-test: --webroot-path "
+        . ($webroot // '(none)') . " does not exist or is not a directory\n";
 
     configtest( $ENV{'CERTBOT_MOCK_APACHE_CONF_DIR'} ) if $ENV{'CERTBOT_MOCK_APACHE_CONF_DIR'};
 
     if (my ($bad) = grep { /\.fail\.local$/ } @domains) {
-        print STDERR "Certbot failed to authenticate some domains (authenticator: apache). "
+        print STDERR "Certbot failed to authenticate some domains (authenticator: webroot). "
             . "The Certificate Authority reported these problems:\n"
             . "  Domain: $bad\n"
             . "  Type:   dns\n"
@@ -114,8 +124,10 @@ chain = $live/chain.pem
 fullchain = $live/fullchain.pem
 
 [renewalparams]
-authenticator = apache
+authenticator = webroot
+webroot_path = $webroot,
 EOF
+    print $fh "[[webroot_map]]\n", map { "$_ = $webroot\n" } @domains;
     close $fh or die "certbot-auto-test: $!\n";
 
     print "Successfully received certificate.\nCertificate is saved at: $live/fullchain.pem\n";
